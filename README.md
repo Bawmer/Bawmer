@@ -76,3 +76,7 @@ npm run test:e2e       # full flow in real browsers with simulated devices (need
 - Rotating the phone mid-take changes the frame size; lock orientation first.
 - If the phone is offline when recording stops, the desktop waits 20 s for the
   remaining footage before saving.
+
+---
+
+This repository also contains **Drumkit Clone**, a VST3 instrument that turns any loop, one-shot or song into a playable drum kit: see [`drumkit-clone/`](drumkit-clone/README.md).
