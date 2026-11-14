@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAW LIVE CAM</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark"></span>DAW <b>LIVE</b> CAM</div>
+  <ol class="steps" id="steps">
+    <li data-step="phone">Connect phone</li>
+    <li data-step="daw">Connect DAW</li>
+    <li data-step="preview">Preview</li>
+    <li data-step="record">Record</li>
+    <li data-step="export">Export</li>
+  </ol>
+  <nav class="tabs">
+    <button class="tab active" data-view="studio">Studio</button>
+    <button class="tab" data-view="library">Sessions</button>
+  </nav>
+  <div class="storage" id="storage" title="Free space on the recordings drive">
+    <div class="storage-bar"><i id="storageFill"></i></div>
+    <span id="storageText">—</span>
+  </div>
+</header>
+
+<!-- ───────────── Studio ───────────── -->
+<main class="view studio" id="view-studio">
+  <section class="stage-col">
+    <div class="modes" id="modes" role="tablist">
+      <button data-mode="studio" class="active"><b>Studio Session</b><small>You + DAW screen</small></button>
+      <button data-mode="performance"><b>Performance</b><small>Camera only</small></button>
+      <button data-mode="tutorial"><b>Tutorial</b><small>Screen + camera</small></button>
+      <button data-mode="social"><b>Social Media</b><small>Reels · TikTok · Shorts</small></button>
+    </div>
+
+    <div class="stage" id="stage">
+      <video id="preview" autoplay playsinline muted></video>
+      <div class="guide" id="guide" hidden></div>
+      <video id="screenPip" autoplay playsinline muted hidden></video>
+      <div class="stage-empty" id="stageEmpty">
+        <div class="pulse-ring"></div>
+        <h2>Connect your phone</h2>
+        <p>Your phone becomes the wireless camera. Scan a code — no app store needed.</p>
+        <button class="btn primary" id="pairBtn">Connect phone</button>
+      </div>
+      <div class="stage-chips">
+        <span class="chip" id="chipCam"><i class="dot"></i><span>Camera offline</span></span>
+        <span class="chip" id="chipAudio"><i class="dot"></i><span>Audio offline</span></span>
+        <span class="chip" id="chipScreen" hidden><i class="dot on"></i><span>Screen capture</span></span>
+      </div>
+      <div class="rec-badge" id="recBadge" hidden><i></i><span>REC</span></div>
+    </div>
+
+    <div class="deck">
+      <div class="transport">
+        <button class="rec-btn" id="recBtn" title="Record (R)" aria-label="Record"><i></i></button>
+        <button class="pause-btn" id="pauseBtn" title="Pause / resume (Space)" aria-label="Pause" disabled><i></i><i></i></button>
+        <div class="timer">
+          <div class="time" id="timer">00:00:00</div>
+          <input class="title-input" id="titleInput" placeholder="Session name" maxlength="80">
+        </div>
+      </div>
+      <div class="wave-wrap">
+        <canvas id="wave"></canvas>
+        <span class="wave-label">DAW AUDIO</span>
+      </div>
+      <div class="meter-wrap" title="DAW input level (peak / RMS)">
+        <canvas id="meter"></canvas>
+        <div class="meter-read"><span id="peakRead">−∞</span><small>dBFS</small></div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="side">
+    <section class="card" id="camCard">
+      <header><h3>Camera</h3><span class="state" id="camState">Not connected</span></header>
+      <div class="cam-stats" id="camStats" hidden>
+        <div><small>Battery</small><b id="statBattery">—</b></div>
+        <div><small>Link</small><b id="statLink">—</b></div>
+        <div><small>Format</small><b id="statFormat">—</b></div>
+      </div>
+      <div class="controls" id="camControls" hidden>
+        <label>Lens
+          <div class="seg" id="facingSeg"><button data-v="environment" class="active">Rear</button><button data-v="user">Front</button></div>
+        </label>
+        <div class="row2">
+          <label>Resolution
+            <select id="resSel"><option value="720">HD 720p</option><option value="1080" selected>Full HD 1080p</option><option value="2160">4K 2160p</option></select>
+          </label>
+          <label>Frame rate
+            <select id="fpsSel"><option>24</option><option selected>30</option><option>60</option></select>
+          </label>
+        </div>
+        <label id="zoomRow">Zoom <output id="zoomOut">1.0×</output>
+          <input type="range" id="zoom" min="1" max="1" step="0.1" value="1">
+        </label>
+        <label id="expRow">Exposure <output id="expOut">0</output>
+          <input type="range" id="exposure" min="-2" max="2" step="0.1" value="0">
+        </label>
+        <label id="focusRow">Focus
+          <div class="focus-line">
+            <div class="seg" id="focusSeg"><button data-v="continuous" class="active">Auto</button><button data-v="manual">Manual</button></div>
+            <input type="range" id="focus" min="0" max="1" step="0.01" value="0" disabled>
+          </div>
+        </label>
+        <div class="row2">
+          <button class="btn" id="rotateBtn" title="Rotate the picture 90°">Rotate <span id="rotOut">0°</span></button>
+          <button class="btn" id="torchBtn" hidden>Light</button>
+        </div>
+        <p class="hint" id="camHint"></p>
+      </div>
+      <div class="card-actions">
+        <button class="btn" id="pairBtn2">Pair phone</button>
+        <button class="btn" id="calBtn" disabled>Calibrate sync</button>
+      </div>
+    </section>
+
+    <section class="card" id="audioCard">
+      <header><h3>DAW Audio</h3><span class="state" id="audioState">Not connected</span></header>
+      <div class="controls">
+        <label>Source
+          <select id="srcSel"></select>
+        </label>
+        <div class="row2">
+          <label>Sample rate
+            <select id="rateSel"><option value="44100">44.1 kHz</option><option value="48000" selected>48 kHz</option><option value="96000">96 kHz</option></select>
+          </label>
+          <label>Bit depth
+            <select id="bitSel"><option value="24" selected>24-bit</option><option value="32">32-bit float</option></select>
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="micOn"> Also record a microphone</label>
+        <label id="micRow" hidden>Microphone
+          <select id="micSel"></select>
+        </label>
+        <label class="check" id="screenRow"><input type="checkbox" id="screenOn"> Capture the DAW screen</label>
+        <p class="hint" id="audioHint"></p>
+      </div>
+      <div class="card-actions">
+        <button class="btn primary" id="audioBtn">Connect DAW audio</button>
+        <button class="btn" id="dawBtn">Routing help</button>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<!-- ───────────── Library / editor ───────────── -->
+<main class="view library" id="view-library" hidden>
+  <aside class="sessions">
+    <h3>Sessions</h3>
+    <ul id="sessionList"></ul>
+    <p class="hint" id="sessionsEmpty" hidden>No recordings yet. Hit record in the Studio.</p>
+  </aside>
+  <section class="editor" id="editor" hidden>
+    <div class="ed-head">
+      <input id="edTitle" class="ed-title" maxlength="120">
+      <span class="ed-meta" id="edMeta"></span>
+      <button class="btn danger" id="edDelete">Delete</button>
+    </div>
+    <div class="ed-main">
+      <div class="ed-player-col">
+        <div class="player-box"><div class="player" id="player">
+          <video id="edScreen" muted playsinline preload="auto"></video>
+          <div class="ed-cam-wrap"><video id="edCam" muted playsinline preload="auto"></video></div>
+          <div class="player-empty" id="playerEmpty" hidden>Audio only</div>
+        </div></div>
+        <audio id="edAudio" preload="auto"></audio>
+        <div class="ed-transport">
+          <button class="btn icon" id="edPlay" aria-label="Play">▶</button>
+          <span class="ed-time" id="edTime">0:00.0 / 0:00.0</span>
+          <span class="spacer"></span>
+          <button class="btn" id="setIn">Set start</button>
+          <button class="btn" id="setOut">Set end</button>
+          <button class="btn" id="resetTrim">Reset trim</button>
+        </div>
+        <div class="timeline" id="timeline"><canvas id="tlCanvas"></canvas></div>
+      </div>
+      <div class="ed-side">
+        <section class="card">
+          <header><h3>Audio / video sync</h3><span class="state on" id="syncAuto">Auto</span></header>
+          <div class="controls">
+            <label>Fine adjust <output id="offOut">0 ms</output>
+              <input type="range" id="offset" min="-500" max="500" step="1" value="0">
+            </label>
+            <div class="nudge">
+              <button class="btn" data-n="-10">−10</button><button class="btn" data-n="-1">−1</button>
+              <button class="btn" data-n="0">0</button>
+              <button class="btn" data-n="1">+1</button><button class="btn" data-n="10">+10</button>
+            </div>
+            <p class="hint" id="syncInfo"></p>
+          </div>
+        </section>
+        <section class="card">
+          <header><h3>Export</h3></header>
+          <div class="controls">
+            <label>Format
+              <div class="seg formats" id="aspectSeg">
+                <button data-v="16:9"><i class="ar ar169"></i>16:9<small>YouTube</small></button>
+                <button data-v="9:16"><i class="ar ar916"></i>9:16<small>Reels · TikTok</small></button>
+                <button data-v="1:1"><i class="ar ar11"></i>1:1<small>Square</small></button>
+              </div>
+            </label>
+            <div class="row2">
+              <label>Resolution
+                <select id="qualSel"><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select>
+              </label>
+              <label>Frame rate
+                <select id="edFps"><option>24</option><option>30</option><option>60</option></select>
+              </label>
+            </div>
+            <label id="layoutRow">Layout
+              <select id="layoutSel">
+                <option value="pip">Screen with camera inset</option>
+                <option value="split">Screen and camera split</option>
+                <option value="camera">Camera only</option>
+                <option value="screen">Screen only</option>
+              </select>
+            </label>
+            <div class="row2">
+              <button class="btn" id="edRotate">Rotate <span id="edRotOut">0°</span></button>
+              <label class="check" id="edMicRow"><input type="checkbox" id="edMic"> Mix microphone</label>
+            </div>
+            <div class="export-btns">
+              <button class="btn primary" id="expMp4">Export MP4</button>
+              <button class="btn" id="expWav">Export WAV</button>
+            </div>
+            <div class="progress" id="expProgress" hidden><i></i><span></span></div>
+            <ul class="exports" id="exportList"></ul>
+            <button class="btn ghost" id="reveal">Show export folder</button>
+            <p class="hint" id="originals"></p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+  <section class="editor-empty" id="editorEmpty"><p>Select a session to preview, trim and export it.</p></section>
+</main>
+
+<!-- ───────────── Dialogs ───────────── -->
+<dialog id="pairDlg" class="dlg">
+  <h2>Connect your phone</h2>
+  <div class="pair">
+    <div class="qr" id="qr"></div>
+    <ol>
+      <li>Put the phone on the <b>same Wi-Fi</b> as this computer.</li>
+      <li>Scan the code with the phone camera.</li>
+      <li>The page uses a private, self-signed certificate — choose <b>Advanced → Continue</b> the first time.</li>
+      <li>Tap <b>Start camera</b>. It reconnects by itself from now on.</li>
+    </ol>
+  </div>
+  <label class="pair-net" id="pairNetRow" hidden>Network <select id="pairNet"></select></label>
+  <code class="pair-url" id="pairUrl"></code>
+  <p class="hint">Tip: add the page to your home screen to launch it like an app. Video and audio never leave your local network.</p>
+  <div class="dlg-actions">
+    <button class="btn ghost" id="unpairBtn" title="Invalidate the current code and create a new one">Reset pairing</button>
+    <span class="spacer"></span>
+    <button class="btn primary" data-close>Done</button>
+  </div>
+</dialog>
+
+<dialog id="calDlg" class="dlg">
+  <h2>Sync calibration</h2>
+  <p id="calText">Point the phone camera at this screen so it fills most of the picture, stop playback in your DAW, then start. The screen will flash a few times.</p>
+  <div class="cal-result" id="calResult" hidden>
+    <div><small>Camera latency</small><b id="calVideo">—</b></div>
+    <div><small>Audio latency</small><b id="calAudio">—</b></div>
+  </div>
+  <div class="dlg-actions">
+    <button class="btn ghost" id="calClear">Clear calibration</button>
+    <span class="spacer"></span>
+    <button class="btn" data-close>Close</button>
+    <button class="btn primary" id="calStart">Start</button>
+  </div>
+</dialog>
+
+<dialog id="dawDlg" class="dlg wide">
+  <h2>Getting DAW audio in</h2>
+  <div id="dawGuide"></div>
+  <div class="dlg-actions"><span class="spacer"></span><button class="btn primary" data-close>Got it</button></div>
+</dialog>
+
+<div class="flash" id="flash"></div>
+<div class="toasts" id="toasts"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

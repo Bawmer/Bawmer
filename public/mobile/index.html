@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#090a0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DAW LIVE CAM">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>DAW LIVE CAM</title>
+<link rel="stylesheet" href="mobile.css">
+</head>
+<body>
+<video id="cam" autoplay playsinline muted></video>
+<div class="focus-ring" id="focusRing"></div>
+
+<header class="top">
+  <span class="chip" id="link"><i class="dot"></i><span>Connecting…</span></span>
+  <span class="chip" id="fmt">—</span>
+  <span class="chip" id="batt" hidden>—</span>
+  <span class="rec" id="rec" hidden><i></i><span id="recTime">00:00</span></span>
+</header>
+
+<footer class="bottom" id="controls" hidden>
+  <label class="slider" id="zoomRow" hidden><span>Zoom</span><input type="range" id="zoom" min="1" max="1" step="0.1" value="1"><output id="zoomOut">1.0×</output></label>
+  <label class="slider" id="expRow" hidden><span>Exposure</span><input type="range" id="exp" min="-2" max="2" step="0.1" value="0"><output id="expOut">0</output></label>
+  <div class="btns">
+    <button id="flip" aria-label="Switch camera">⟲ Flip</button>
+    <button id="torch" hidden>Light</button>
+    <span class="note" id="note"></span>
+  </div>
+</footer>
+
+<section class="gate" id="gate">
+  <div class="logo"><i></i>DAW <b>LIVE</b> CAM</div>
+  <h1 id="gateTitle">Wireless camera</h1>
+  <p id="gateText">This phone becomes the camera for your recording session. Place it on a stand, pointed at you or your gear.</p>
+  <button id="startBtn">Start camera</button>
+  <small id="gateSmall">Video stays on your local network.</small>
+</section>
+<script type="module" src="mobile.js"></script>
+</body>
+</html>
