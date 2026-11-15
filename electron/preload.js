@@ -18,5 +18,7 @@ if (isMini) {
     setBusy: (state) => ipcRenderer.send('studio:busy', state),
     status: (s) => ipcRenderer.send('studio:status', s),
     onCommand: (cb) => ipcRenderer.on('studio:command', (_e, cmd) => cb(cmd)),
+    show: () => ipcRenderer.send('studio:show'),
+    hide: () => ipcRenderer.send('studio:hide'),
   });
 }

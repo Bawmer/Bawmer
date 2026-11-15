@@ -26,6 +26,7 @@
   <span class="sp"></span>
   <button id="pause" title="Pause / resume (Ctrl+Alt+P)">❚❚</button>
   <button id="stop" title="Stop (Ctrl+Alt+R)">■ Stop</button>
+  <button id="screen" title="Record another screen or window">🖥</button>
   <button id="show" title="Show the dashboard (Ctrl+Alt+D)">⤢</button>
 </div>
 <script>
@@ -42,6 +43,7 @@
   $('pause').onclick = () => window.dlcMini.command('pause');
   $('stop').onclick = () => window.dlcMini.command(state.recording ? 'stop' : 'live-stop');
   $('show').onclick = () => window.dlcMini.command('show');
+  $('screen').onclick = () => window.dlcMini.command('screen');
 </script>
 </body>
 </html>

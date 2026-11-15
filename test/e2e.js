@@ -179,7 +179,12 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     if (shots) await desk.screenshot({ path: path.join(shots, 'both.png') });
     await desk.click('#recBtn');
     await desk.waitForSelector('#recBadge:not([hidden])');
-    await sleep(5000);
+    await sleep(3000);
+    // switch the captured screen while recording
+    await desk.click('#screenSrcBtn');
+    await desk.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => t.textContent.includes('Now capturing the new screen')), null, { timeout: 10000 });
+    assert(await desk.evaluate(() => !document.getElementById('recBadge').hidden), 'screen switched live — recording kept running');
+    await sleep(3000);
     await desk.click('#recBtn');
     await desk.waitForFunction((prev) => document.querySelector('#sessionList li.active') && document.querySelector('#sessionList li.active').dataset.id !== prev, id2, { timeout: 60000 });
     const id3 = await desk.evaluate(() => document.querySelector('#sessionList li.active').dataset.id);
@@ -187,6 +192,9 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     assert(!!p3.camera && !!p3.camera2, `phone and USB camera both recorded (${p3.camera && p3.camera.file} + ${p3.camera2 && p3.camera2.file})`);
     assert(Number.isFinite(p3.sync.camera2OffsetSec) && Math.abs(p3.sync.camera2OffsetSec) < 1, `USB camera aligned to the audio (offset ${p3.sync.camera2OffsetSec.toFixed(3)} s)`);
     assert(await desk.evaluate(() => !document.getElementById('edCam2Wrap').hidden), 'editor shows both cameras');
+    const sd = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe(`../${id3}/${p3.screen.file}`));
+    const ss = sd ? +sd[2] * 60 + +sd[3] : 0;
+    assert(Math.abs(ss - p3.duration) < 1.5, `screen recording has no gap after the switch (${ss.toFixed(1)} s vs ${p3.duration.toFixed(1)} s)`);
     await desk.click('#expMp4');
     await desk.waitForFunction(() => document.querySelectorAll('#exportList li').length === 1, null, { timeout: 60000 });
     const exp3 = fs.readdirSync(path.join(dataDir, 'Sessions', id3, 'exports')).find((f) => f.endsWith('.mp4'));
@@ -197,6 +205,8 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     const flv = path.join(dataDir, 'live-received.flv');
     const rtmpPort = 19350 + Math.floor(Math.random() * 400);
     const receiver = spawn(ffmpegPath(), ['-hide_banner', '-loglevel', 'error', '-listen', '1', '-i', `rtmp://127.0.0.1:${rtmpPort}/live/secretkey`, '-c', 'copy', '-y', flv]);
+    const receiverDone = new Promise((r) => receiver.on('close', r)); // attach now: it may exit early
+    receiver.stderr.on('data', (d) => console.log('  · receiver:', String(d).trim()));
     await sleep(800);
     await desk.click('.tab[data-view="studio"]');
     await desk.click('#livePlat [data-v="custom"]');
@@ -209,7 +219,8 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     await sleep(7000);
     if (shots) await desk.screenshot({ path: path.join(shots, 'live.png') });
     await desk.click('#liveBtn');
-    await new Promise((r) => { receiver.on('close', r); setTimeout(() => { receiver.kill('SIGINT'); }, 8000); });
+    setTimeout(() => receiver.kill('SIGINT'), 8000);
+    await Promise.race([receiverDone, sleep(15000)]);
     const got = probe(`../../live-received.flv`);
     const dur = /Duration: \d+:(\d+):([\d.]+)/.exec(got);
     assert(/Video: h264.*720x1280/.test(got) && /Audio: aac.*48000 Hz, stereo/.test(got) && dur && +dur[1] * 60 + +dur[2] > 4,

@@ -18,6 +18,7 @@ class FrameSource {
         while (this.on) {
           const { value, done } = await this.reader.read().catch(() => ({ done: true }));
           if (done) break;
+          if (!this.on) { value.close(); break; }
           if (this.frame) this.frame.close();
           this.frame = value;
         }
@@ -84,7 +85,15 @@ export class Compositor {
       fs.origin = track;
       return fs;
     };
-    this.screen = swap(this.screen, screenTrack);
+    // A ScreenRelay is drawn straight from its canvas: no second decode of the same picture.
+    if (screenTrack instanceof ScreenRelay) {
+      if (this.screen && this.screen.stop && !this.screen.relay) this.screen.stop();
+      const relay = screenTrack;
+      this.screen = { relay, origin: relay, get image() { return relay.live ? { src: relay.canvas, w: relay.width, h: relay.height } : null; } };
+    } else {
+      if (this.screen && this.screen.relay) this.screen = null;
+      this.screen = swap(this.screen, screenTrack);
+    }
     const list = (cameraTracks || []).filter(Boolean);
     const next = [];
     for (let i = 0; i < 2; i++) next.push(swap(this.cameras[i] || null, list[i] || null));
@@ -145,9 +154,72 @@ export class Compositor {
 
   dispose() {
     this.stop();
-    if (this.screen) this.screen.stop();
+    if (this.screen && this.screen.stop) this.screen.stop();
     for (const c of this.cameras) if (c) c.stop();
     this.screen = null;
     this.cameras = [];
+  }
+}
+
+/**
+ * A steady screen track whose source can be swapped while recording or live:
+ * the recorder, the preview and the live picture all read this one track, so
+ * picking another screen or window never interrupts them. If the captured
+ * window closes, the last picture is held until a new source is chosen.
+ */
+export class ScreenRelay {
+  constructor(track, fps = 30) {
+    const s = track.getSettings();
+    this.width = Math.max(2, Math.round((s.width || 1920) / 2) * 2);
+    this.height = Math.max(2, Math.round((s.height || 1080) / 2) * 2);
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = this.width;
+    this.canvas.height = this.height;
+    this.ctx = this.canvas.getContext('2d', { alpha: false });
+    this.ctx.fillStyle = '#000';
+    this.ctx.fillRect(0, 0, this.width, this.height);
+    this.source = null;
+    this.onSourceEnded = null;
+    this.switchTo(track);
+    if (hasGenerator) {
+      this.generator = new MediaStreamTrackGenerator({ kind: 'video' });
+      this.writer = this.generator.writable.getWriter();
+      this.track = this.generator;
+    } else {
+      this.track = this.canvas.captureStream(fps).getVideoTracks()[0];
+    }
+    this.track.contentHint = 'detail'; // keep small DAW text sharp
+    const t0 = performance.now();
+    this.timer = setInterval(() => {
+      const img = this.source && this.source.image;
+      if (img) {
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, this.width, this.height);
+        contain(this.ctx, img, { x: 0, y: 0, w: this.width, h: this.height });
+      }
+      if (this.writer) {
+        const frame = new VideoFrame(this.canvas, { timestamp: Math.round((performance.now() - t0) * 1000) });
+        this.writer.write(frame).catch(() => {}).finally(() => frame.close());
+      }
+    }, 1000 / fps);
+  }
+
+  /** Use another screen or window from now on. */
+  switchTo(track) {
+    const old = this.source;
+    this.source = new FrameSource(track);
+    this.source.origin = track;
+    track.addEventListener('ended', () => { if (this.source && this.source.origin === track && this.onSourceEnded) this.onSourceEnded(); });
+    if (old) { old.stop(); old.origin.stop(); }
+  }
+
+  get live() { return !!this.track && this.track.readyState === 'live'; }
+
+  stop() {
+    clearInterval(this.timer);
+    if (this.writer) { this.writer.close().catch(() => {}); this.writer = null; }
+    if (this.track) this.track.stop();
+    if (this.source) { this.source.stop(); this.source.origin.stop(); }
+    this.source = null;
   }
 }

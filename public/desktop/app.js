@@ -1,7 +1,7 @@
 import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, frameBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
 import { AudioEngine, clockNow } from './audio-engine.js';
 import { initEditor, openSession, refreshSessions, onExportMessage } from './editor.js';
-import { Compositor } from './compositor.js';
+import { Compositor, ScreenRelay } from './compositor.js';
 
 const KIND_SCREEN = 3;
 const KIND_USBCAM = 5;
@@ -408,8 +408,52 @@ const RAW = { echoCancellation: false, noiseSuppression: false, autoGainControl:
 function stopDisplay() {
   if (S.display) S.display.getTracks().forEach((t) => t.stop());
   S.display = null;
+  if (S.relay) { S.relay.stop(); S.relay = null; }
   $('screenMain').srcObject = null;
   layoutPreview();
+}
+
+/** The steady DAW screen track (see ScreenRelay), or null. */
+const screenTrack = () => (S.relay && S.relay.live ? S.relay.track : null);
+
+function useScreenTrack(vt) {
+  vt.contentHint = 'detail';
+  if (!window.dlcNative) $('screenSrcName').textContent = vt.label || 'Shared screen';
+  if (S.relay) S.relay.switchTo(vt);
+  else {
+    S.relay = new ScreenRelay(vt);
+    S.relay.onSourceEnded = () => {
+      // The captured window was closed: keep the last picture and ask for another.
+      toast('The captured window or screen is gone — choose another with “Change”.', 'error');
+      if (window.dlcNative && (S.rec || S.live)) window.dlcNative.show();
+    };
+    $('screenMain').srcObject = new MediaStream([S.relay.track]);
+  }
+  if (S.rec && !S.screenRec) startScreenRecorder(); // screen added during a recording
+  if (S.live) { const { screen, cameras } = liveSources(); compositor.setSources(screen, cameras); }
+  renderAudio();
+}
+
+/** Pick another screen or window — live, without stopping audio, recording or stream. */
+async function switchScreen() {
+  try {
+    if (window.dlcNative) {
+      const id = await pickScreenSource();
+      if (!id) return;
+      await window.dlcNative.selectSource(id);
+    }
+    const ds = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30, width: { max: 3840 }, height: { max: 2160 } }, audio: false });
+    const vt = ds.getVideoTracks()[0];
+    if (!vt) return;
+    $('screenOn').checked = true;
+    useScreenTrack(vt);
+    toast('Now capturing the new screen.', 'ok');
+  } catch (e) {
+    if (e.name !== 'NotAllowedError') toast(e.message || String(e), 'error');
+  } finally {
+    // Back to the DAW: hide the dashboard again if a session is running.
+    if (window.dlcNative && (S.rec || S.live) && $('autoHide').checked) window.dlcNative.hide();
+  }
 }
 
 // ───────────────────────────────────────────── what to record: DAW window or screen
@@ -491,9 +535,9 @@ async function connectAudio() {
         dawStream = new MediaStream(display.getAudioTracks());
       }
       const vt = display.getVideoTracks()[0];
-      if (vt) vt.contentHint = 'detail'; // keep small DAW text sharp
-      if (wantScreen && vt) vt.addEventListener('ended', () => { $('screenOn').checked = false; renderAudio(); toast('Screen capture stopped'); });
-      else if (vt) { vt.stop(); display.removeTrack(vt); }
+      if (vt) display.removeTrack(vt); // the video lives in the screen relay from here on
+      if (wantScreen && vt) useScreenTrack(vt);
+      else if (vt) vt.stop();
     }
     if (!dawStream) {
       dawStream = await navigator.mediaDevices.getUserMedia({
@@ -505,7 +549,6 @@ async function connectAudio() {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: $('micSel').value }, ...RAW } });
     }
     await engine.start({ dawStream, micStream, sampleRate });
-    if (S.display && S.display.getVideoTracks().length) $('screenMain').srcObject = new MediaStream(S.display.getVideoTracks());
     savePrefs();
     await listDevices(); // labels become available once permission is granted
   } catch (e) {
@@ -521,12 +564,13 @@ async function connectAudio() {
 function renderAudio() {
   if (S.live) { const { screen, cameras } = liveSources(); compositor.setSources(screen, cameras); }
   const on = engine.running;
-  const screen = !!(S.display && S.display.getVideoTracks().some((t) => t.readyState === 'live'));
+  const screen = !!screenTrack();
   $('chipAudio').className = `chip ${on ? 'on' : ''}`;
   $('chipAudio').lastElementChild.textContent = on ? `DAW audio · ${engine.sampleRate / 1000} kHz` : 'Audio offline';
   $('chipScreen').hidden = !screen;
   $('screenMain').hidden = !screen;
-  $('screenSrcRow').hidden = !(window.dlcNative && $('screenOn').checked);
+  $('screenSrcRow').hidden = !((window.dlcNative && $('screenOn').checked) || screenTrack());
+  $('liveScreenBtn').disabled = !engine.running;
   layoutPreview();
   $('audioState').textContent = on ? 'Connected' : 'Not connected';
   $('audioState').className = `state ${on ? 'on' : ''}`;
@@ -606,7 +650,8 @@ function drawWave() {
 
 // ───────────────────────────────────────────── recording
 function startScreenRecorder() {
-  const tracks = S.display ? S.display.getVideoTracks().filter((t) => t.readyState === 'live') : [];
+  if (S.screenRec) return; // one screen recorder per session: two would interleave into one file
+  const tracks = screenTrack() ? [screenTrack()] : [];
   if (!tracks.length) return;
   const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m));
   const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime, videoBitsPerSecond: 10_000_000 });
@@ -636,9 +681,14 @@ async function stopScreenRecorder() {
 }
 
 async function startRecording() {
-  if (S.rec || !engine.running) return;
+  if (S.rec || S.preRoll || !engine.running) return;
   $('recBtn').disabled = true;
   try {
+    if (window.dlcNative && $('autoHide').checked) {
+      S.preRoll = true;
+      syncBusy(); // minimise first…
+      await sleep(700); // …and let it get out of the picture before the first frame
+    }
     const started = waitFor('rec.started', 5000);
     send({
       type: 'rec.start', title: $('titleInput').value.trim() || defaultTitle(), mode: S.mode,
@@ -657,6 +707,9 @@ async function startRecording() {
     if (!cams) toast('No camera connected — recording audio' + (S.screenRec ? ' and screen' : '') + ' only.');
   } catch (e) {
     toast(e.message, 'error');
+  } finally {
+    S.preRoll = false;
+    syncBusy();
   }
   renderRec();
 }
@@ -771,7 +824,7 @@ function liveLayout() {
   return { layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, rotation: S.rotation };
 }
 function liveSources() {
-  const screen = S.display ? S.display.getVideoTracks().find((t) => t.readyState === 'live') : null;
+  const screen = screenTrack() ? S.relay : null;
   const live = (st) => (st ? st.getVideoTracks().find((t) => t.readyState === 'live') : null);
   const cameras = S.camSource === 'usb' ? [live(S.usb.stream)]
     : S.camSource === 'both' ? [live(S.phoneStream), live(S.usb.stream)] : [live(S.phoneStream)];
@@ -850,6 +903,7 @@ async function goLive() {
   saveLiveCfg();
   const q = cfg.quality === 1080 ? { s: 1080, kbps: 6000 } : { s: 720, kbps: 4000 };
   const vertical = cfg.format === '9:16';
+  if (window.dlcNative && $('autoHide').checked && !S.rec) { S.preRoll = true; syncBusy(); await sleep(700); S.preRoll = false; }
   S.live = { cfg, width: vertical ? q.s : Math.round((q.s * 16) / 9 / 2) * 2, height: vertical ? Math.round((q.s * 16) / 9 / 2) * 2 : q.s, kbpsTarget: q.kbps, on: false, retry: 0, wanted: true };
   startLiveEncoder();
   renderLive();
@@ -902,13 +956,14 @@ function loadLivePlatform(plat) {
 // ───────────────────────────────────────────── dashboard hiding & floating controls (desktop app)
 function syncBusy() {
   if (!window.dlcNative) return;
-  window.dlcNative.setBusy({ recording: !!S.rec, live: !!S.live, autoHide: $('autoHide').checked });
+  window.dlcNative.setBusy({ recording: !!S.rec || !!S.preRoll, live: !!S.live, autoHide: $('autoHide').checked });
 }
 function onShellCommand(cmd) {
   if (cmd === 'toggle') { if (S.rec) stopRecording(); else startRecording(); }
   else if (cmd === 'stop') stopRecording();
   else if (cmd === 'pause') togglePause();
   else if (cmd === 'live-stop') stopLive();
+  else if (cmd === 'screen') switchScreen();
 }
 
 // ───────────────────────────────────────────── workflow steps & storage
@@ -1193,6 +1248,7 @@ async function init() {
   for (const id of ['liveServer', 'liveKey', 'liveFormat', 'liveQual', 'liveVert']) $(id).addEventListener('change', () => { saveLiveCfg(); renderLive(); });
   $('liveServer').addEventListener('input', () => renderLive());
   $('liveBtn').onclick = () => (S.live ? stopLive() : goLive());
+  $('liveScreenBtn').onclick = () => switchScreen();
   loadLivePlatform(S.liveCfg.platform || 'instagram');
   $('usbSel').onchange = () => { if (S.camSource === 'usb') startUsb(); };
   $('usbQuick').onclick = () => setCamSource('usb');
@@ -1204,8 +1260,8 @@ async function init() {
   $('screenOn').addEventListener('change', renderAudio);
   $('screenSrcBtn').onclick = async () => {
     try {
-      const id = await pickScreenSource();
-      if (id && engine.running && S.display) toast('Disconnect and reconnect DAW audio to switch to the new window.');
+      if (engine.running) { await switchScreen(); return; }
+      await pickScreenSource();
     } catch (e) { toast(e.message, 'error'); }
   };
 

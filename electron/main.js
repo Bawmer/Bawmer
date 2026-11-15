@@ -35,7 +35,7 @@ function showMini() {
   if (mini && !mini.isDestroyed()) { mini.showInactive(); return; }
   const area = screen.getPrimaryDisplay().workArea;
   mini = new BrowserWindow({
-    width: 300, height: 56, x: Math.round(area.x + area.width / 2 - 150), y: area.y + 12,
+    width: 340, height: 56, x: Math.round(area.x + area.width / 2 - 170), y: area.y + 12,
     frame: false, resizable: false, alwaysOnTop: true, skipTaskbar: true, focusable: true, show: false,
     transparent: true, hasShadow: false, title: 'DAW LIVE CAM controls',
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.js') },
@@ -71,10 +71,13 @@ ipcMain.on('studio:busy', (event, state) => {
 ipcMain.on('studio:status', (event, s) => {
   if (fromStudio(event) && mini && !mini.isDestroyed()) mini.webContents.send('mini:status', s);
 });
+ipcMain.on('studio:show', (event) => { if (fromStudio(event)) restoreDashboard(); });
+ipcMain.on('studio:hide', (event) => { if (fromStudio(event) && win && busy && (busy.recording || busy.live)) win.minimize(); });
 ipcMain.on('mini:command', (event, cmd) => {
   if (!mini || event.sender !== mini.webContents) return;
   if (cmd === 'show') { restoreDashboard(); return; }
-  if (win && ['stop', 'pause', 'live-stop'].includes(cmd)) win.webContents.send('studio:command', cmd);
+  if (cmd === 'screen') restoreDashboard(); // the picker opens on the dashboard
+  if (win && ['stop', 'pause', 'live-stop', 'screen'].includes(cmd)) win.webContents.send('studio:command', cmd);
 });
 
 ipcMain.handle('sources:select', (event, id) => {

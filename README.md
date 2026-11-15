@@ -42,6 +42,10 @@ npm run dist       # build installers (electron-builder)
    time with Pause / Stop / Show buttons. Shortcuts from inside the DAW:
    **Ctrl+Alt+R** record/stop, **Ctrl+Alt+P** pause, **Ctrl+Alt+D** dashboard.
    Untick *Minimise this window while recording or live* to keep it open.
+   The window is out of the way *before* the first frame is recorded.
+   **Change the captured screen or window at any time** — while recording or
+   live — with *Change* (DAW Audio card), *Change screen* (Live card) or the 🖥
+   button on the floating bar; recording and stream keep running without a gap.
 5. The session opens in **Sessions**: preview, trim, fine-tune sync, export.
 
 ## Live on Instagram or TikTok
