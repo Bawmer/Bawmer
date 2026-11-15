@@ -165,6 +165,7 @@ async function start(opts = {}) {
       p.edit = {
         trimStart: 0, trimEnd: p.duration, manualOffsetMs: 0, rotation: Number(cm.rotation) || 0,
         quality: 1080, fps: [24, 30, 60].includes(cm.fps) ? cm.fps : 30, includeMic: !!p.mic,
+        pipSize: 'small', pipCorner: 'br',
         ...MODE_DEFAULTS[p.mode], ...(msg.preset || {}),
       };
       p.status = 'ready';

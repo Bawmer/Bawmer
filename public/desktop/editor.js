@@ -1,5 +1,5 @@
 // Session library and editor: preview, trim, sync adjustment and export.
-import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce } from './util.js';
+import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce, pipBox, dragToCorner } from './util.js';
 
 let E = null; // the open session: { id, project, peaks, edit, dur }
 let drag = null;
@@ -84,6 +84,9 @@ function renderEdit() {
   const p = $('player'), pr = E.project;
   p.dataset.aspect = e.aspect;
   p.dataset.layout = !pr.screen ? 'camera' : !pr.camera ? 'screen' : e.layout;
+  $('pipRow').hidden = p.dataset.layout !== 'pip';
+  setSeg($('pipSizeSeg'), e.pipSize || 'small');
+  setSeg($('pipCornerSeg'), e.pipCorner || 'br');
   layoutCam();
 }
 
@@ -94,6 +97,14 @@ function layoutCam() {
   const c = E.project.camera || {};
   const vw = v.videoWidth || c.width || 16, vh = v.videoHeight || c.height || 9;
   $('player').style.setProperty('--cam-ar', rot ? `${vh}/${vw}` : `${vw}/${vh}`);
+  if ($('player').dataset.layout === 'pip') {
+    // Same square box, size and corner as the export.
+    const P = $('player');
+    const b = pipBox(P.clientWidth, P.clientHeight, E.edit.pipSize, E.edit.pipCorner);
+    Object.assign(wrap.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.size}px`, height: `${b.size}px` });
+  } else {
+    wrap.style.left = wrap.style.top = wrap.style.width = wrap.style.height = '';
+  }
   const w = wrap.clientWidth, h = wrap.clientHeight;
   Object.assign(v.style, {
     inset: 'auto', left: '50%', top: '50%', width: `${rot ? h : w}px`, height: `${rot ? w : h}px`,
@@ -265,6 +276,11 @@ export function initEditor() {
   $('qualSel').onchange = () => setEdit({ quality: Number($('qualSel').value) });
   $('edFps').onchange = () => setEdit({ fps: Number($('edFps').value) });
   $('layoutSel').onchange = () => setEdit({ layout: $('layoutSel').value });
+  segmented($('pipSizeSeg'), (v) => setEdit({ pipSize: v }));
+  segmented($('pipCornerSeg'), (v) => setEdit({ pipCorner: v }));
+  dragToCorner(document.querySelector('.ed-cam-wrap'),
+    () => (E && $('player').dataset.layout === 'pip' ? $('player') : null),
+    (c) => setEdit({ pipCorner: c }));
   $('edMic').onchange = () => setEdit({ includeMic: $('edMic').checked });
   $('edRotate').onclick = () => setEdit({ rotation: ((E.edit.rotation || 0) + 90) % 360 });
   $('expMp4').onclick = () => startExport('mp4');
@@ -283,7 +299,7 @@ export function initEditor() {
     try { await api(`/api/sessions/${E.id}`, 'DELETE'); closeEditor(); refreshSessions(); } catch (e) { toast(e.message, 'error'); }
   };
   $('edCam').addEventListener('loadedmetadata', layoutCam);
-  new ResizeObserver(layoutCam).observe(document.querySelector('.ed-cam-wrap'));
+  new ResizeObserver(layoutCam).observe($('player'));
   document.addEventListener('keydown', (e) => {
     if ($('view-library').hidden || !E || e.target.closest('input, select, textarea, dialog')) return;
     if (e.code === 'Space') { e.preventDefault(); $('edPlay').click(); }

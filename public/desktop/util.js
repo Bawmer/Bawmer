@@ -66,3 +66,45 @@ export function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
+
+// Square camera box over the full DAW screen. Same maths as server/exporter.js
+// (pipBox), so the previews show exactly what the export will contain.
+const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
+const even = (n) => Math.round(n / 2) * 2;
+export function pipBox(w, h, size, corner) {
+  const s = even(Math.min(w, h) * (PIP_SIZES[size] || PIP_SIZES.small));
+  const m = even(Math.min(w, h) * 0.03);
+  const c = ['tl', 'tr', 'bl', 'br'].includes(corner) ? corner : 'br';
+  return { size: s, x: c[1] === 'l' ? m : w - s - m, y: c[0] === 't' ? m : h - s - m };
+}
+
+/** Nearest corner of a rectangle to a point. */
+export function cornerAt(rect, x, y) {
+  return (y < rect.top + rect.height / 2 ? 't' : 'b') + (x < rect.left + rect.width / 2 ? 'l' : 'r');
+}
+
+/** Let the user drag the camera box; it snaps to the nearest corner on release. */
+export function dragToCorner(el, getArea, onCorner) {
+  let start = null;
+  el.addEventListener('pointerdown', (e) => {
+    if (!getArea()) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    start = { x: e.clientX, y: e.clientY, left: el.offsetLeft, top: el.offsetTop };
+    el.classList.add('dragging');
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    el.style.left = `${start.left + e.clientX - start.x}px`;
+    el.style.top = `${start.top + e.clientY - start.y}px`;
+  });
+  const end = (e) => {
+    if (!start) return;
+    start = null;
+    el.classList.remove('dragging');
+    const area = getArea();
+    if (area) onCorner(cornerAt(area.getBoundingClientRect(), e.clientX, e.clientY));
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+}

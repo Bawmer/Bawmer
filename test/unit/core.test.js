@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { WavWriter, HEADER_BYTES } = require('../../server/wav');
 const { computeSync, keepSegments } = require('../../server/sync');
-const { buildMp4Args, canvasSize } = require('../../server/exporter');
+const { buildMp4Args, canvasSize, pipBox } = require('../../server/exporter');
 
 test('wav writer produces a valid 24-bit header and samples', () => {
   const file = path.join(os.tmpdir(), `dlc-${process.pid}.wav`);
@@ -58,6 +58,16 @@ test('mp4 export graph', () => {
   const graph = args[args.indexOf('-filter_complex') + 1];
   assert.equal(total, 4);
   assert.match(graph, /setpts=\(PTS-STARTPTS\)\*1\.000020\+0\.200000\/TB/);
-  assert.match(graph, /overlay=/);
+  // Full DAW screen is fitted (never cropped); camera is a small square, bottom-right by default.
+  assert.match(graph, /\[scr\]scale=1920:1080:force_original_aspect_ratio=decrease[^;]*pad=1920:1080/);
+  assert.match(graph, /\[cam\]scale=294:294:force_original_aspect_ratio=increase,crop=294:294,setsar=1,pad=302:302:4:4/);
+  assert.match(graph, /overlay=1586:746\[v\]/);
   assert.match(graph, /concat=n=2:v=0:a=1/);
+});
+
+test('square camera box: sizes and corners', () => {
+  assert.deepEqual(pipBox(1920, 1080, 'small', 'br'), { size: 302, x: 1586, y: 746 });
+  assert.deepEqual(pipBox(1920, 1080, 'large', 'tl'), { size: 496, x: 32, y: 32 });
+  assert.deepEqual(pipBox(1080, 1920, 'medium', 'tr'), { size: 388, x: 660, y: 32 });
+  assert.deepEqual(pipBox(1280, 720, undefined, 'nope'), pipBox(1280, 720, 'small', 'br'));
 });

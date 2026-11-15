@@ -17,6 +17,16 @@ function ffmpegPath() {
 }
 
 const even = (n) => Math.round(n / 2) * 2;
+
+// Square camera box over the full DAW screen. Keep in sync with
+// public/desktop/util.js (pipBox), which draws the same box in the previews.
+const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
+function pipBox(w, h, size, corner) {
+  const s = even(Math.min(w, h) * (PIP_SIZES[size] || PIP_SIZES.small));
+  const m = even(Math.min(w, h) * 0.03);
+  const c = ['tl', 'tr', 'bl', 'br'].includes(corner) ? corner : 'br';
+  return { size: s, x: c[1] === 'l' ? m : w - s - m, y: c[0] === 't' ? m : h - s - m };
+}
 const f = (n) => Number(n).toFixed(6);
 
 function canvasSize(aspect, quality) {
@@ -68,6 +78,9 @@ function buildMp4Args(project, dir, edit, outFile) {
     `fps=${fps}:start_time=0,tpad=stop_mode=clone:stop_duration=${f(padSec)},` +
     `select='${sel}',setpts=N/(${fps}*TB)[${label}]`;
   const fill = (W, H) => `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1`;
+  // The DAW screen is never cropped: it is scaled to fit and centred.
+  const fit = (W, H) => `scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+    `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`;
 
   const chains = [];
   if (camIdx >= 0) {
@@ -77,16 +90,14 @@ function buildMp4Args(project, dir, edit, outFile) {
   if (scrIdx >= 0) chains.push(onTimeline(scrIdx, sync.screenOffsetSec || 0, 1, '', 'scr'));
 
   if (layout === 'camera') chains.push(`[cam]${fill(w, h)}[v]`);
-  else if (layout === 'screen') chains.push(`[scr]${fill(w, h)}[v]`);
+  else if (layout === 'screen') chains.push(`[scr]${fit(w, h)}[v]`);
   else if (layout === 'pip') {
-    const pw = even(w * (w >= h ? 0.28 : 0.42));
-    const camAspect = project.camera.width && project.camera.height
-      ? (e.rotation % 180 ? project.camera.width / project.camera.height : project.camera.height / project.camera.width)
-      : 9 / 16;
-    const ph = even(pw * camAspect);
-    const m = even(w * 0.025);
-    chains.push(`[scr]${fill(w, h)}[bg]`, `[cam]${fill(pw, ph)}[pip]`,
-      `[bg][pip]overlay=W-w-${m}:H-h-${m}[v]`);
+    const box = pipBox(w, h, e.pipSize, e.pipCorner);
+    const b = Math.max(2, even(box.size * 0.01)); // thin outline so the box reads against a dark DAW
+    const inner = box.size - 2 * b;
+    chains.push(`[scr]${fit(w, h)}[bg]`,
+      `[cam]${fill(inner, inner)},pad=${box.size}:${box.size}:${b}:${b}:color=0x2ff3e0[pip]`,
+      `[bg][pip]overlay=${box.x}:${box.y}[v]`);
   } else { // split: side by side on wide canvases, stacked otherwise
     if (w > h) {
       const cw = even(w * 0.34);
@@ -165,4 +176,4 @@ async function remux(src, dst, isMp4) {
   await runFfmpeg(args);
 }
 
-module.exports = { buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };
+module.exports = { pipBox, buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };

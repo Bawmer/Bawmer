@@ -1,4 +1,4 @@
-import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce } from './util.js';
+import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, dragToCorner } from './util.js';
 import { AudioEngine, clockNow } from './audio-engine.js';
 import { initEditor, openSession, refreshSessions, onExportMessage } from './editor.js';
 
@@ -14,7 +14,7 @@ const MODES = {
 const engine = new AudioEngine();
 const S = {
   app: null, ws: null, phone: false, cam: null, pc: null, pendingIce: [],
-  mode: 'studio', rotation: 0, display: null, screenRec: null, calibration: null,
+  mode: 'studio', rotation: 0, pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
   rec: null, // { id, pauses, pausedAt, cameraStartMs, cameraMarkers, screenStartMs, stopping }
   waiters: new Map(), calEdges: null, savedOnce: false,
 };
@@ -154,10 +154,30 @@ function renderCam() {
   renderSteps();
 }
 
+/** True when the DAW screen is live: it becomes the main picture with the camera boxed. */
+const composite = () => !!$('screenMain').srcObject && !$('screenMain').hidden;
+
 function layoutPreview() {
-  const v = $('preview'), stage = $('stage');
+  const v = $('preview'), stage = $('stage'), scr = $('screenMain');
   const sw = stage.clientWidth, sh = stage.clientHeight;
   const rot = S.rotation % 180 !== 0;
+  const comp = composite();
+  stage.classList.toggle('composite', comp);
+  $('pipRowStudio').hidden = !comp;
+  setSeg($('pipSizeStudio'), S.pipSize);
+  setSeg($('pipCornerStudio'), S.pipCorner);
+  if (comp) {
+    // The 16:9 frame of the final video: full DAW screen, camera in a square box.
+    const cw = Math.min(sw, (sh * 16) / 9), ch = (cw * 9) / 16;
+    const cx = (sw - cw) / 2, cy = (sh - ch) / 2;
+    Object.assign(scr.style, { left: `${cx}px`, top: `${cy}px`, width: `${cw}px`, height: `${ch}px` });
+    const b = pipBox(cw, ch, S.pipSize, S.pipCorner);
+    Object.assign(v.style, { left: `${cx + b.x}px`, top: `${cy + b.y}px`, width: `${b.size}px`, height: `${b.size}px`, transform: `rotate(${S.rotation}deg)` });
+    $('rotOut').textContent = `${S.rotation}°`;
+    $('guide').hidden = true;
+    return;
+  }
+  v.style.left = v.style.top = '';
   v.style.width = `${rot ? sh : sw}px`;
   v.style.height = `${rot ? sw : sh}px`;
   v.style.transform = `rotate(${S.rotation}deg)`;
@@ -203,7 +223,58 @@ const RAW = { echoCancellation: false, noiseSuppression: false, autoGainControl:
 function stopDisplay() {
   if (S.display) S.display.getTracks().forEach((t) => t.stop());
   S.display = null;
-  $('screenPip').srcObject = null;
+  $('screenMain').srcObject = null;
+  layoutPreview();
+}
+
+// ───────────────────────────────────────────── what to record: DAW window or screen
+const DAW_WINDOW = /ableton|fl studio|fl64|logic pro|pro tools|cubase|studio one|reaper|bitwig/i;
+
+async function sourceStillThere(id) {
+  const list = await window.dlcNative.listSources().catch(() => []);
+  const hit = list.find((x) => x.id === id);
+  if (hit) $('screenSrcName').textContent = `${hit.kind === 'screen' ? 'Screen' : 'Window'}: ${hit.name}`;
+  return !!hit;
+}
+
+/** Electron only: choose the DAW window (or a screen) with thumbnails. */
+async function pickScreenSource() {
+  const list = await window.dlcNative.listSources();
+  if (!list.length) throw new Error('Nothing to record was found on this computer.');
+  const dlg = $('srcDlg'), grid = $('srcGrid');
+  let chosen = (list.find((x) => x.kind === 'window' && DAW_WINDOW.test(x.name)) || list.find((x) => x.kind === 'screen') || list[0]).id;
+  grid.innerHTML = '';
+  for (const src of list) {
+    const b = document.createElement('button');
+    const daw = src.kind === 'window' && DAW_WINDOW.test(src.name);
+    b.className = (src.id === chosen ? 'active ' : '') + (daw ? 'daw' : '');
+    const img = document.createElement('img');
+    img.src = src.thumb;
+    img.alt = '';
+    const name = document.createElement('span');
+    name.textContent = src.name;
+    const kind = document.createElement('small');
+    kind.textContent = daw ? 'DAW window' : src.kind === 'screen' ? 'Whole screen' : 'Window';
+    b.append(img, name, kind);
+    b.onclick = () => { chosen = src.id; for (const x of grid.children) x.classList.toggle('active', x === b); };
+    b.ondblclick = () => { chosen = src.id; dlg.close('ok'); };
+    grid.append(b);
+  }
+  $('srcOk').disabled = false;
+  return new Promise((resolve) => {
+    $('srcOk').onclick = () => dlg.close('ok');
+    $('srcCancel').onclick = () => dlg.close('');
+    dlg.addEventListener('close', () => {
+      if (dlg.returnValue !== 'ok') return resolve(null);
+      const src = list.find((x) => x.id === chosen);
+      S.screenSource = chosen;
+      $('screenSrcName').textContent = `${src.kind === 'screen' ? 'Screen' : 'Window'}: ${src.name}`;
+      savePrefs();
+      resolve(chosen);
+    }, { once: true });
+    dlg.returnValue = '';
+    dlg.showModal();
+  });
 }
 
 async function connectAudio() {
@@ -217,8 +288,14 @@ async function connectAudio() {
     if (!source) throw new Error('No audio source available.');
     let dawStream;
     if (source === 'system' || wantScreen) {
+      if (wantScreen && window.dlcNative) {
+        const id = S.screenSource && (await sourceStillThere(S.screenSource)) ? S.screenSource : await pickScreenSource();
+        if (!id) return; // cancelled
+        await window.dlcNative.selectSource(id);
+      }
       const display = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 30 }, audio: source === 'system' ? RAW : false, systemAudio: 'include',
+        video: { frameRate: 30, width: { max: 3840 }, height: { max: 2160 } },
+        audio: source === 'system' ? RAW : false, systemAudio: 'include',
       });
       S.display = display;
       if (source === 'system') {
@@ -228,6 +305,7 @@ async function connectAudio() {
         dawStream = new MediaStream(display.getAudioTracks());
       }
       const vt = display.getVideoTracks()[0];
+      if (vt) vt.contentHint = 'detail'; // keep small DAW text sharp
       if (wantScreen && vt) vt.addEventListener('ended', () => { $('screenOn').checked = false; renderAudio(); toast('Screen capture stopped'); });
       else if (vt) { vt.stop(); display.removeTrack(vt); }
     }
@@ -241,7 +319,7 @@ async function connectAudio() {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: $('micSel').value }, ...RAW } });
     }
     await engine.start({ dawStream, micStream, sampleRate });
-    if (S.display && S.display.getVideoTracks().length) $('screenPip').srcObject = new MediaStream(S.display.getVideoTracks());
+    if (S.display && S.display.getVideoTracks().length) $('screenMain').srcObject = new MediaStream(S.display.getVideoTracks());
     savePrefs();
     await listDevices(); // labels become available once permission is granted
   } catch (e) {
@@ -260,7 +338,9 @@ function renderAudio() {
   $('chipAudio').className = `chip ${on ? 'on' : ''}`;
   $('chipAudio').lastElementChild.textContent = on ? `DAW audio · ${engine.sampleRate / 1000} kHz` : 'Audio offline';
   $('chipScreen').hidden = !screen;
-  $('screenPip').hidden = !screen;
+  $('screenMain').hidden = !screen;
+  $('screenSrcRow').hidden = !(window.dlcNative && $('screenOn').checked);
+  layoutPreview();
   $('audioState').textContent = on ? 'Connected' : 'Not connected';
   $('audioState').className = `state ${on ? 'on' : ''}`;
   $('audioBtn').textContent = on ? 'Disconnect' : 'Connect DAW audio';
@@ -408,6 +488,7 @@ async function stopRecording() {
       cameraMarkers: r.cameraMarkers, screenStartMs: r.screenStartMs, pauses: r.pauses, calibration: S.calibration,
     },
     camera: { width: c.width, height: c.height, fps: Math.round(c.fps || 30), rotation: S.rotation },
+    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner },
   });
   toast('Saving session…');
   try {
@@ -499,6 +580,7 @@ function savePrefs() {
   api('/api/settings', 'PUT', { prefs: {
     source: $('srcSel').value, sampleRate: $('rateSel').value, bitDepth: $('bitSel').value,
     mode: S.mode, rotation: S.rotation, mic: $('micOn').checked,
+    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource,
   } }).catch(() => {});
 }
 
@@ -631,9 +713,13 @@ async function init() {
   if (p.sampleRate) $('rateSel').value = p.sampleRate;
   if (p.bitDepth) $('bitSel').value = p.bitDepth;
   S.rotation = Number(p.rotation) || 0;
+  if (p.pipSize) S.pipSize = p.pipSize;
+  if (p.pipCorner) S.pipCorner = p.pipCorner;
+  S.screenSource = p.screenSource || null;
   $('micOn').checked = !!p.mic;
   setMode(p.mode || 'studio');
   await listDevices();
+  if (window.dlcNative && S.screenSource) sourceStillThere(S.screenSource).then((ok) => { if (!ok) S.screenSource = null; });
   navigator.mediaDevices.addEventListener('devicechange', () => { if (!engine.running) listDevices(); });
   connectWs();
   initEditor();
@@ -660,6 +746,16 @@ async function init() {
   $('focus').oninput = () => camSetSoon({ focusDistance: Number($('focus').value) });
   $('torchBtn').onclick = () => camSet({ torch: !(S.cam && S.cam.torch) });
   $('rotateBtn').onclick = () => { S.rotation = (S.rotation + 90) % 360; layoutPreview(); savePrefs(); };
+  segmented($('pipSizeStudio'), (v) => { S.pipSize = v; layoutPreview(); savePrefs(); });
+  segmented($('pipCornerStudio'), (v) => { S.pipCorner = v; layoutPreview(); savePrefs(); });
+  dragToCorner($('preview'), () => (composite() ? $('screenMain') : null), (c) => { S.pipCorner = c; layoutPreview(); savePrefs(); });
+  $('screenOn').addEventListener('change', renderAudio);
+  $('screenSrcBtn').onclick = async () => {
+    try {
+      const id = await pickScreenSource();
+      if (id && engine.running && S.display) toast('Disconnect and reconnect DAW audio to switch to the new window.');
+    } catch (e) { toast(e.message, 'error'); }
+  };
 
   $('calBtn').onclick = () => {
     $('calText').textContent = 'Point the phone camera at this screen so it fills most of the picture, stop playback in your DAW, then start. The screen will flash a few times.';

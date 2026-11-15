@@ -61,6 +61,13 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     await sleep(1500);
     assert(await desk.evaluate(() => document.getElementById('peakRead').textContent !== '−∞'), 'DAW input meter shows signal');
 
+    if (screenOn) {
+      const st = await desk.evaluate(() => {
+        const v = document.getElementById('preview').getBoundingClientRect();
+        return { comp: document.getElementById('stage').classList.contains('composite'), w: v.width, h: v.height };
+      });
+      assert(st.comp && Math.abs(st.w - st.h) < 1.5, 'studio preview shows the DAW screen with the camera in a square box');
+    }
     await desk.click('#recBtn');
     await desk.waitForSelector('#recBadge:not([hidden])');
     await sleep(4000);
@@ -95,7 +102,11 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     await desk.click('#edPlay'); await sleep(1500);
     assert(await desk.evaluate(() => !document.getElementById('edAudio').paused && document.getElementById('edCam').currentTime > 0), 'editor preview plays audio and video together');
     await desk.click('#edPlay');
-    await desk.click('#aspectSeg [data-v="9:16"]');
+    assert(await desk.evaluate(() => document.getElementById('player').dataset.layout === 'pip' && !document.getElementById('pipRow').hidden),
+      'editor defaults to full DAW screen + square camera');
+    const box = await desk.evaluate(() => { const r = document.querySelector('.ed-cam-wrap').getBoundingClientRect(); return { w: r.width, h: r.height }; });
+    assert(Math.abs(box.w - box.h) < 1.5 && box.w > 40, `camera box in the editor is square (${box.w.toFixed(0)}×${box.h.toFixed(0)})`);
+    await desk.click('#aspectSeg [data-v="16:9"]');
     await desk.selectOption('#qualSel', '720');
     if (shots) { await sleep(400); await desk.screenshot({ path: path.join(shots, 'editor.png') }); }
     await desk.click('#expMp4');
@@ -104,7 +115,8 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     await desk.waitForFunction(() => document.querySelectorAll('#exportList li').length === 2, null, { timeout: 60000 });
     const exps = fs.readdirSync(path.join(dir, 'exports'));
     const mp4 = probe(`exports/${exps.find((f) => f.endsWith('.mp4'))}`);
-    assert(/Video: h264.*720x1280/.test(mp4) && /Audio: aac/.test(mp4), 'MP4 export is 720×1280 H.264 + AAC');
+    assert(/Video: h264.*1280x720/.test(mp4) && /Audio: aac/.test(mp4), 'MP4 export is 1280×720 H.264 + AAC');
+    if (shots) execFileSync(ffmpegPath(), ['-y', '-loglevel', 'error', '-ss', '2', '-i', path.join(dir, 'exports', exps.find((f) => f.endsWith('.mp4'))), '-frames:v', '1', path.join(shots, 'export-frame.png')]);
     const d = /Duration: \d+:(\d+):([\d.]+)/.exec(mp4);
     const expected = project.duration - (project.timing.pauses[0][1] - project.timing.pauses[0][0]);
     assert(Math.abs(+d[1] * 60 + +d[2] - expected) < 0.3, `export length excludes the pause (${d[2]} s ≈ ${expected.toFixed(2)} s)`);

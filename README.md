@@ -6,6 +6,10 @@ automatically and exported as MP4 for YouTube, Reels, TikTok or Shorts.
 
 **CONNECT PHONE → CONNECT DAW → PREVIEW → RECORD → EXPORT**
 
+## Download
+
+Windows x64: [`release/DAW-LIVE-CAM-win-x64.exe`](release/DAW-LIVE-CAM-win-x64.exe) — portable, double-click to run (unsigned: SmartScreen → *More info* → *Run anyway*).
+
 ## Run it
 
 ```bash
@@ -20,8 +24,12 @@ npm run dist       # build installers (electron-builder)
    warning once, then tap **Start camera**. Add it to the home screen to launch
    it like an app; it reconnects by itself afterwards.
 2. Choose the audio **Source**, then **Connect DAW audio** (see *Routing help* in the app).
-3. Press **Record**. Pause/resume as needed, press again to stop.
-4. The session opens in **Sessions**: preview, trim, fine-tune sync, export.
+3. Leave **Capture the DAW screen** ticked (Studio Session). In the Windows app a
+   picker opens: choose your **DAW window** (or a whole screen). The preview then
+   shows the final picture — your complete DAW with you in a small square box.
+   Drag the box to any corner, or pick its size (S / M / L) in the Camera card.
+4. Press **Record**. Pause/resume as needed, press again to stop.
+5. The session opens in **Sessions**: preview, trim, fine-tune sync, export.
 
 ## What it does
 
@@ -33,7 +41,7 @@ npm run dist       # build installers (electron-builder)
 | Audio sources | Windows: system loopback (WASAPI) with one click. Any OS: virtual drivers (BlackHole, Loopback, VB-CABLE, VoiceMeeter) or an interface's loopback input. Works with Ableton Live, FL Studio, Logic Pro, Pro Tools, Cubase, Studio One, Reaper, Bitwig — anything that plays through an audio device. |
 | Sync | Phone and desktop clocks are synchronised continuously; audio is stamped by sample count. Markers every 5 s measure clock drift, which is corrected on long takes by retiming the video (audio is never stretched). A flash/click calibration tool measures camera and audio latency; a ±500 ms manual adjustment is available in the editor. |
 | Modes | Studio Session (camera + DAW screen), Performance (camera), Tutorial (screen + camera split), Social Media (9:16 with a framing guide). |
-| Editor | Preview, trim, sync adjust, rotate; layouts: camera, screen, inset, split; export MP4 (H.264/AAC) in 16:9, 9:16, 1:1 at 720p–4K, and WAV in the original format. Edits are saved with the project. |
+| Editor | Preview, trim, sync adjust, rotate; layouts: **full DAW screen + square camera** (default; box size and corner adjustable, the screen is never cropped), camera, screen, split; export MP4 (H.264/AAC) in 16:9, 9:16, 1:1 at 720p–4K, and WAV in the original format. Edits are saved with the project. |
 | Privacy | Everything stays on your machine and local network. No cloud, no accounts, no STUN/TURN servers. The desktop API only answers on `127.0.0.1`; the phone needs the pairing token. |
 
 Recordings live in `Videos/DAW Live Cam/Sessions/<id>/` (`~/DAW Live Cam` with

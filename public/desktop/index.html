@@ -37,9 +37,9 @@
     </div>
 
     <div class="stage" id="stage">
+      <video id="screenMain" autoplay playsinline muted hidden></video>
       <video id="preview" autoplay playsinline muted></video>
       <div class="guide" id="guide" hidden></div>
-      <video id="screenPip" autoplay playsinline muted hidden></video>
       <div class="stage-empty" id="stageEmpty">
         <div class="pulse-ring"></div>
         <h2>Connect your phone</h2>
@@ -106,6 +106,14 @@
             <input type="range" id="focus" min="0" max="1" step="0.01" value="0" disabled>
           </div>
         </label>
+        <div class="row2" id="pipRowStudio" hidden>
+          <label>Camera box
+            <div class="seg" id="pipSizeStudio"><button data-v="small">S</button><button data-v="medium">M</button><button data-v="large">L</button></div>
+          </label>
+          <label>Corner
+            <div class="seg corners" id="pipCornerStudio"><button data-v="tl" title="Top left">↖</button><button data-v="tr" title="Top right">↗</button><button data-v="bl" title="Bottom left">↙</button><button data-v="br" title="Bottom right">↘</button></div>
+          </label>
+        </div>
         <div class="row2">
           <button class="btn" id="rotateBtn" title="Rotate the picture 90°">Rotate <span id="rotOut">0°</span></button>
           <button class="btn" id="torchBtn" hidden>Light</button>
@@ -137,6 +145,7 @@
           <select id="micSel"></select>
         </label>
         <label class="check" id="screenRow"><input type="checkbox" id="screenOn"> Capture the DAW screen</label>
+        <div class="screen-src" id="screenSrcRow" hidden><span id="screenSrcName">You choose the DAW window when you connect</span><button class="btn ghost" id="screenSrcBtn">Change</button></div>
         <p class="hint" id="audioHint"></p>
       </div>
       <div class="card-actions">
@@ -213,12 +222,20 @@
             </div>
             <label id="layoutRow">Layout
               <select id="layoutSel">
-                <option value="pip">Screen with camera inset</option>
+                <option value="pip">Full DAW screen + square camera</option>
                 <option value="split">Screen and camera split</option>
                 <option value="camera">Camera only</option>
                 <option value="screen">Screen only</option>
               </select>
             </label>
+            <div class="row2" id="pipRow">
+              <label>Camera box
+                <div class="seg" id="pipSizeSeg"><button data-v="small">S</button><button data-v="medium">M</button><button data-v="large">L</button></div>
+              </label>
+              <label>Corner
+                <div class="seg corners" id="pipCornerSeg"><button data-v="tl" title="Top left">↖</button><button data-v="tr" title="Top right">↗</button><button data-v="bl" title="Bottom left">↙</button><button data-v="br" title="Bottom right">↘</button></div>
+              </label>
+            </div>
             <div class="row2">
               <button class="btn" id="edRotate">Rotate <span id="edRotOut">0°</span></button>
               <label class="check" id="edMicRow"><input type="checkbox" id="edMic"> Mix microphone</label>
@@ -273,6 +290,17 @@
     <span class="spacer"></span>
     <button class="btn" data-close>Close</button>
     <button class="btn primary" id="calStart">Start</button>
+  </div>
+</dialog>
+
+<dialog id="srcDlg" class="dlg wide">
+  <h2>What should be recorded?</h2>
+  <p>Pick your <b>DAW window</b> to record the complete DAW, even when other windows are in front of it — or record a whole screen. Keep the DAW window open (not minimised) while recording.</p>
+  <div class="src-grid" id="srcGrid"></div>
+  <div class="dlg-actions">
+    <span class="spacer"></span>
+    <button class="btn" id="srcCancel">Cancel</button>
+    <button class="btn primary" id="srcOk" disabled>Record this</button>
   </div>
 </dialog>
 
