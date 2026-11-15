@@ -23,12 +23,15 @@ public:
     void selectPad (int pad);
     void padPressed (int pad);
     void padDraggedOut (int pad);
+    /** Drags MIDI out to the DAW: every drum (pad = -1) or one pad. */
+    void dragMidiOut (int pad);
 
     static juce::Colour padColour (int pad);
 
 private:
     class Overview;
     class PadButton;
+    class MidiDragHandle;
     struct Look;
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -44,7 +47,12 @@ private:
     std::unique_ptr<Overview> overview;
     juce::OwnedArray<PadButton> pads;
 
-    juce::TextButton loadButton { "Load audio..." }, exportButton { "Export WAVs..." }, reanalyseButton { "Re-analyze" };
+    std::unique_ptr<MidiDragHandle> midiHandle;
+
+    juce::TextButton loadButton { "Load audio..." }, exportButton { "Export kit..." }, reanalyseButton { "Re-analyze" };
+    juce::Slider bpm;
+    juce::ComboBox quantizeBox, noteMapBox, layoutBox;
+    juce::Label bpmLabel, quantizeLabel, noteMapLabel, layoutLabel;
     juce::Slider sensitivity, separation, gain, tune, pan, master;
     juce::Label sensitivityLabel, separationLabel, gainLabel, tuneLabel, panLabel, masterLabel, selectedLabel, infoLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttachment, tuneAttachment, panAttachment, masterAttachment;

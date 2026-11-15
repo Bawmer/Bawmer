@@ -306,7 +306,16 @@ void DrumkitCloneProcessor::startAnalysis (const juce::File& file)
 void DrumkitCloneProcessor::loadFile (const juce::File& file)
 {
     if (file.existsAsFile())
+    {
+        juce::String previous;
+        {
+            const juce::ScopedLock sl (kitLock);
+            previous = sourcePath;
+        }
+        if (file.getFullPathName() != previous)
+            midiBpmOverride.store (0.0);    // a new file brings its own tempo
         startAnalysis (file);
+    }
 }
 
 bool DrumkitCloneProcessor::canReanalyse() const
@@ -367,7 +376,55 @@ bool DrumkitCloneProcessor::exportKit (const juce::File& folder, juce::String& e
             return false;
         }
     }
+
+    // MIDI: the whole pattern as one multi-track file, plus one file per drum
+    auto options = getMidiOptions();
+    const auto midiFolder = folder.getChildFile ("MIDI");
+    midiFolder.deleteRecursively();
+    options.layout = MidiOptions::multiTrackFile;
+    const bool multiOk = ! MidiExport::writeForDrag (*current, options, midiFolder).isEmpty();
+    options.layout = MidiOptions::filePerDrum;
+    if (! multiOk || MidiExport::writeForDrag (*current, options, midiFolder).isEmpty())
+    {
+        error = "Couldn't write the MIDI files";
+        return false;
+    }
     return true;
+}
+
+//==============================================================================
+double DrumkitCloneProcessor::getMidiBpm() const
+{
+    const double manual = midiBpmOverride.load();
+    if (manual > 0.0)
+        return manual;
+    const auto current = getKit();
+    return current != nullptr ? current->bpm : 120.0;
+}
+
+MidiOptions DrumkitCloneProcessor::getMidiOptions() const
+{
+    MidiOptions o;
+    o.bpm = getMidiBpm();
+    o.quantize = midiQuantize.load();
+    o.noteMap = midiNoteMap.load();
+    o.layout = midiLayout.load();
+    return o;
+}
+
+juce::StringArray DrumkitCloneProcessor::writeMidiForDrag (int pad) const
+{
+    const auto current = getKit();
+    if (current == nullptr || current->pads.empty())
+        return {};
+
+    // a fresh folder per drag, so a DAW still reading the previous files isn't disturbed
+    auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Drumkit Clone").getChildFile ("MIDI");
+    for (auto& old : root.findChildFiles (juce::File::findDirectories, false))
+        if (old.getLastModificationTime() < juce::Time::getCurrentTime() - juce::RelativeTime::days (1))
+            old.deleteRecursively();
+    const auto folder = root.getNonexistentChildFile (juce::File::createLegalFileName (current->sourceName), {}, false);
+    return MidiExport::writeForDrag (*current, getMidiOptions(), folder, pad);
 }
 
 //==============================================================================
@@ -379,6 +436,10 @@ void DrumkitCloneProcessor::getStateInformation (juce::MemoryBlock& dest)
     root.removeChild (root.getChildWithName ("Kit"), nullptr);
     root.setProperty ("sensitivity", sensitivity.load(), nullptr);
     root.setProperty ("separation", separation.load(), nullptr);
+    root.setProperty ("midiBpm", midiBpmOverride.load(), nullptr);
+    root.setProperty ("midiQuantize", midiQuantize.load(), nullptr);
+    root.setProperty ("midiNoteMap", midiNoteMap.load(), nullptr);
+    root.setProperty ("midiLayout", midiLayout.load(), nullptr);
 
     Kit::Ptr current;
     {
@@ -393,14 +454,21 @@ void DrumkitCloneProcessor::getStateInformation (juce::MemoryBlock& dest)
         k.setProperty ("sourceName", current->sourceName, nullptr);
         k.setProperty ("sourceSeconds", current->sourceSeconds, nullptr);
         k.setProperty ("totalHits", current->totalHits, nullptr);
+        k.setProperty ("bpm", current->bpm, nullptr);
         k.setProperty ("overview", juce::MemoryBlock (current->overview.data(), current->overview.size() * sizeof (float)), nullptr);
 
         juce::MemoryBlock hitData;
         {
             juce::MemoryOutputStream hs (hitData, false);
-            for (auto& h : current->hits) { hs.writeFloat (h.position); hs.writeShort ((short) h.pad); }
+            for (auto& h : current->hits)
+            {
+                hs.writeFloat (h.position);
+                hs.writeShort ((short) h.pad);
+                hs.writeDouble (h.seconds);
+                hs.writeFloat (h.velocity);
+            }
         }
-        k.setProperty ("hits", hitData, nullptr);
+        k.setProperty ("hits2", hitData, nullptr);
 
         juce::FlacAudioFormat flac;
         for (auto& pad : current->pads)
@@ -438,6 +506,12 @@ void DrumkitCloneProcessor::setStateInformation (const void* data, int size)
 
     sensitivity.store ((float) root.getProperty ("sensitivity", 0.5f));
     separation.store ((float) root.getProperty ("separation", 0.5f));
+    midiBpmOverride.store ((double) root.getProperty ("midiBpm", 0.0));
+    midiQuantize.store ((int) root.getProperty ("midiQuantize", 0));
+    midiNoteMap.store ((int) root.getProperty ("midiNoteMap", (int) MidiOptions::padNotes));
+    midiLayout.store ((int) root.getProperty ("midiLayout", (int) MidiOptions::filePerDrum));
+    for (auto id : { "midiBpm", "midiQuantize", "midiNoteMap", "midiLayout" })
+        root.removeProperty (id, nullptr);
 
     Kit::Ptr restored;
     if (k.isValid())
@@ -446,20 +520,35 @@ void DrumkitCloneProcessor::setStateInformation (const void* data, int size)
         restored->sourceName = k["sourceName"].toString();
         restored->sourceSeconds = k["sourceSeconds"];
         restored->totalHits = k["totalHits"];
+        restored->bpm = k.getProperty ("bpm", 120.0);
 
         if (auto* ov = k["overview"].getBinaryData())
         {
             restored->overview.resize (ov->getSize() / sizeof (float));
             std::memcpy (restored->overview.data(), ov->getData(), restored->overview.size() * sizeof (float));
         }
-        if (auto* hd = k["hits"].getBinaryData())
+        if (auto* hd = k["hits2"].getBinaryData())
         {
             juce::MemoryInputStream hs (*hd, false);
+            while (hs.getNumBytesRemaining() >= 18)
+            {
+                HitMark m;
+                m.position = hs.readFloat();
+                m.pad = hs.readShort();
+                m.seconds = hs.readDouble();
+                m.velocity = hs.readFloat();
+                restored->hits.push_back (m);
+            }
+        }
+        else if (auto* old = k["hits"].getBinaryData())     // saved before MIDI export existed
+        {
+            juce::MemoryInputStream hs (*old, false);
             while (hs.getNumBytesRemaining() >= 6)
             {
                 HitMark m;
                 m.position = hs.readFloat();
                 m.pad = hs.readShort();
+                m.seconds = m.position * restored->sourceSeconds;
                 restored->hits.push_back (m);
             }
         }

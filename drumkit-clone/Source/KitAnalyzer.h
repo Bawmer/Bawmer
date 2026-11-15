@@ -31,6 +31,8 @@ struct HitMark
 {
     float position = 0.0f;            // 0..1 through the source
     int pad = -1;                     // -1 = not assigned to a pad
+    double seconds = 0.0;             // onset time in the source
+    float velocity = 1.0f;            // 0..1, relative to the loudest hit of the same pad
 };
 
 struct Kit : public juce::ReferenceCountedObject
@@ -40,6 +42,7 @@ struct Kit : public juce::ReferenceCountedObject
     juce::String sourceName;
     double sourceSeconds = 0.0;
     int totalHits = 0;
+    double bpm = 120.0;               // estimated tempo of the source
     std::vector<PadSample> pads;
     std::vector<float> overview;      // peak envelope of the whole source
     std::vector<HitMark> hits;
@@ -62,6 +65,9 @@ public:
         Returns nullptr if cancelled. */
     static Kit::Ptr analyse (const juce::AudioBuffer<float>& source, double sampleRate,
                              const AnalysisSettings& settings, const ProgressFn& progress);
+
+    /** Estimates the tempo from onset times (seconds) and strengths. */
+    static double estimateTempo (const std::vector<std::pair<double, float>>& onsets, double totalSeconds);
 
     /** Loads (up to 10 minutes of) an audio file and analyses it. */
     static Kit::Ptr analyseFile (const juce::File& file, const AnalysisSettings& settings,

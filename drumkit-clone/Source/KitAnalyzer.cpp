@@ -817,12 +817,104 @@ Kit::Ptr KitAnalyzer::analyse (const juce::AudioBuffer<float>& source, double sr
         kit->pads.push_back (std::move (p));
     }
 
+    // per-pad loudest hit, so velocities reproduce the dynamics within each drum
+    std::vector<float> padPeak (kit->pads.size(), 1.0e-9f);
+    for (auto& h : hits)
+        if (h.cluster >= 0 && clusterToPad[(size_t) h.cluster] >= 0)
+            padPeak[(size_t) clusterToPad[(size_t) h.cluster]] = juce::jmax (padPeak[(size_t) clusterToPad[(size_t) h.cluster]], h.peak);
+
+    std::vector<std::pair<double, float>> tempoInput;
     kit->hits.reserve (hits.size());
     for (auto& h : hits)
-        kit->hits.push_back ({ (float) h.onset / (float) n, h.cluster >= 0 ? clusterToPad[(size_t) h.cluster] : -1 });
+    {
+        HitMark m;
+        m.position = (float) h.onset / (float) n;
+        m.seconds = h.onset / sr;
+        m.pad = h.cluster >= 0 ? clusterToPad[(size_t) h.cluster] : -1;
+        // playback gain is velocity^2, so sqrt keeps the original level ratio
+        m.velocity = m.pad >= 0 ? std::sqrt (juce::jlimit (0.0f, 1.0f, h.peak / padPeak[(size_t) m.pad])) : 1.0f;
+        kit->hits.push_back (m);
+        tempoInput.push_back ({ m.seconds, h.peak / globalPeak });
+    }
+    kit->bpm = estimateTempo (tempoInput, kit->sourceSeconds);
 
     progress (1.0f);
     return kit;
+}
+
+double KitAnalyzer::estimateTempo (const std::vector<std::pair<double, float>>& onsets, double totalSeconds)
+{
+    constexpr double fps = 100.0;                 // onset envelope resolution
+    constexpr double minBpm = 70.0, maxBpm = 180.0;
+    const int numFrames = (int) (totalSeconds * fps) + 8;
+    if (onsets.size() < 4 || totalSeconds <= 0.5)
+        return 120.0;
+
+    // onset strength envelope, smoothed so slightly early/late hits still line up
+    std::vector<float> env ((size_t) numFrames, 0.0f);
+    for (auto& [t, w] : onsets)
+    {
+        const double c = t * fps;
+        for (int k = (int) c - 6; k <= (int) c + 6; ++k)
+            if (juce::isPositiveAndBelow (k, numFrames))
+                env[(size_t) k] += std::sqrt (juce::jmax (0.0f, w)) * (float) std::exp (-0.5 * std::pow ((k - c) / 2.0, 2.0));
+    }
+    float mean = 0.0f;
+    for (auto v : env) mean += v;
+    mean /= (float) numFrames;
+    for (auto& v : env) v -= mean;
+
+    const int maxLag = juce::jmin (numFrames - 1, (int) std::ceil (4.0 * 60.0 * fps / minBpm) + 2);
+    std::vector<double> acf ((size_t) maxLag + 1, 0.0);
+    for (int lag = 1; lag <= maxLag; ++lag)
+    {
+        double sum = 0.0;
+        for (int i = 0; i + lag < numFrames; ++i)
+            sum += (double) env[(size_t) i] * env[(size_t) (i + lag)];
+        acf[(size_t) lag] = sum / (numFrames - lag);   // unbiased, so long lags aren't penalised
+    }
+    auto acfAt = [&] (double lag)
+    {
+        if (lag < 1.0 || lag >= maxLag) return 0.0;
+        const int i = (int) lag;
+        const double f = lag - i;
+        return acf[(size_t) i] * (1.0 - f) + acf[(size_t) i + 1] * f;
+    };
+    // a beat period that also repeats at 2 and 4 beats (bars) scores higher
+    auto score = [&] (double bpm)
+    {
+        const double beat = 60.0 * fps / bpm;
+        return acfAt (beat) + 0.5 * acfAt (2.0 * beat) + 0.5 * acfAt (4.0 * beat) + 0.25 * acfAt (0.5 * beat);
+    };
+
+    double best = 120.0, bestScore = -1.0e30;
+    for (double bpm = minBpm; bpm < maxBpm; bpm += 0.1)
+    {
+        const double s = score (bpm);
+        if (s > bestScore) { bestScore = s; best = bpm; }
+    }
+
+    // Loops are usually cut to a whole number of bars: if the length implies a tempo that
+    // scores nearly as well, it is the exact one.
+    if (totalSeconds < 90.0 && bestScore > 0.0)
+    {
+        double lengthBest = 0.0, lengthScore = -1.0e30;
+        for (int bars : { 1, 2, 4, 8, 16, 32 })
+        {
+            const double bpm = bars * 4 * 60.0 / totalSeconds;
+            if (bpm >= minBpm && bpm < maxBpm && score (bpm) > lengthScore) { lengthScore = score (bpm); lengthBest = bpm; }
+        }
+        if (lengthBest > 0.0 && lengthScore >= 0.85 * bestScore)
+            return std::round (lengthBest * 100.0) / 100.0;
+    }
+
+    // refine around the peak, then snap to a whole BPM when it is that close
+    double refined = best;
+    for (double bpm = best - 0.1; bpm <= best + 0.1; bpm += 0.01)
+        if (score (bpm) > score (refined)) refined = bpm;
+    if (std::abs (refined - std::round (refined)) < 0.25)
+        return std::round (refined);
+    return std::round (refined * 10.0) / 10.0;
 }
 
 Kit::Ptr KitAnalyzer::analyseFile (const juce::File& file, const AnalysisSettings& settings,

@@ -22,8 +22,27 @@ ready to play from MIDI.
 | Re-analyze | Runs the same file again with the current two settings. |
 | Gain / Tune / Pan | Per pad, automatable. Tune is ±24 semitones. |
 | Master | Output level. |
-| Export WAVs... | Writes every pad as a 24-bit WAV into a `<name> Kit` folder. |
+| Export kit... | Writes every pad as a 24-bit WAV into a `<name> Kit` folder, plus a `MIDI` folder with the pattern. |
 | Drag a pad out | Drops that pad's WAV straight into the DAW or a folder. |
+| **Drag MIDI to DAW** | Drops the loop's pattern as MIDI, one track per drum (see below). |
+| MIDI tag on a pad | Drags just that drum's MIDI part. |
+
+## Loop to MIDI tracks
+
+After a loop is analysed, hold **DRAG MIDI TO DAW** and drop it on your DAW's track
+area. Each drum becomes its own MIDI track (Kick, Snare, Hat...), with the hits at
+the times they happen in the loop and velocities that follow the original dynamics.
+
+| Option | What it does |
+| --- | --- |
+| BPM | Tempo the notes are written at. It is detected from the loop (a loop cut to whole bars gets its exact tempo); correct it here if it is wrong, e.g. half or double. |
+| Quantize | Off keeps the groove; 1/8, 1/16 or 1/32 snaps notes to the grid. |
+| Notes | **Pads**: C1 upwards, so the tracks play Drumkit Clone's pads. **GM drums**: Kick 36, Snare 38, Clap 39, Closed hat 42, Open hat 46, Toms 45-50, Crash 49, to drive any drum plugin. |
+| Files | **One per drum** drops several `.mid` files at once (Kick.mid, Snare.mid...) - most DAWs (Ableton Live, Cubase, Studio One, Reaper, Bitwig, Logic) create one track per file. **Multi-track** drops one Type 1 `.mid` with a named track per drum, for DAWs that split multi-track files themselves. |
+
+To hear the drums from the Drumkit Clone pads, route each new MIDI track to this
+instance (or put a Drumkit Clone on each track with the same kit loaded - the
+kit is saved per instance). With **GM drums** any GM-mapped drum instrument works.
 
 The coloured markers on the waveform show which pad each detected hit went to.
 The kit is saved inside the DAW project, so a session reopens with its pads even

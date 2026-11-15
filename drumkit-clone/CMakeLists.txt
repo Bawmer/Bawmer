@@ -46,6 +46,7 @@ juce_add_plugin(DrumkitClone
 
 target_sources(DrumkitClone PRIVATE
     Source/KitAnalyzer.cpp
+        Source/MidiExport.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
 
@@ -70,6 +71,7 @@ if(DKC_BUILD_TESTS)
     target_sources(DrumkitCloneTests PRIVATE
         Tests/Main.cpp
         Source/KitAnalyzer.cpp
+        Source/MidiExport.cpp
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp)
     target_include_directories(DrumkitCloneTests PRIVATE Source)

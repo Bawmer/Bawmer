@@ -2,6 +2,7 @@
 // optionally renders the editor to a PNG (pass an output path as the first argument).
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "MidiExport.h"
 #include <iostream>
 
 using namespace dkc;
@@ -97,10 +98,10 @@ static int hitsOfType (const Kit& kit, int type)
     return n;
 }
 
-static Synth makeLoop (int bars, bool withBass)
+static Synth makeLoop (int bars, bool withBass, double bpm = 120.0, double tail = 0.5)
 {
-    const double beat = 0.5;    // 120 bpm
-    Synth s (bars * 4 * beat + 0.5);
+    const double beat = 60.0 / bpm;
+    Synth s (bars * 4 * beat + tail);
     juce::Random level (7);
     for (int bar = 0; bar < bars; ++bar)
     {
@@ -207,7 +208,102 @@ int main (int argc, char** argv)
         CHECK (KitAnalyzer::analyse (s.buffer, s.sr, settings, [] (float p) { return p < 0.3f; }) == nullptr, "cancel should return null");
     }
 
-    std::cout << "6. processor: file load, MIDI playback, state round-trip\n";
+    std::cout << "6. MIDI: tempo, one part per drum, timing, GM map, multi-track\n";
+    {
+        auto s = makeLoop (4, false);
+        auto kit = KitAnalyzer::analyse (s.buffer, s.sr, settings, noProgress);
+        std::cout << "  detected tempo: " << kit->bpm << " BPM\n";
+        CHECK (std::abs (kit->bpm - 120.0) < 0.5, "expected ~120 BPM, got " << kit->bpm);
+
+        auto exact = makeLoop (4, false, 97.0, 0.0);      // a loop cut to exactly 4 bars
+        auto kit97 = KitAnalyzer::analyse (exact.buffer, exact.sr, settings, noProgress);
+        std::cout << "  exact 4-bar loop at 97 BPM -> " << kit97->bpm << " BPM\n";
+        CHECK (std::abs (kit97->bpm - 97.0) < 0.05, "expected 97 BPM, got " << kit97->bpm);
+
+        MidiOptions o;
+        o.bpm = kit->bpm;
+        o.quantize = 4;
+        const int q = MidiExport::ticksPerQuarter;
+        auto ticksOf = [] (const juce::MidiMessageSequence& seq, int& note, std::vector<int>& vel)
+        {
+            std::vector<int> t;
+            for (auto* e : seq)
+                if (e->message.isNoteOn()) { t.push_back ((int) e->message.getTimeStamp()); note = e->message.getNoteNumber(); vel.push_back (e->message.getVelocity()); }
+            return t;
+        };
+        auto padOfType = [&] (int type) { for (int i = 0; i < (int) kit->pads.size(); ++i) if (kit->pads[(size_t) i].type == type) return i; return -1; };
+
+        const int kick = padOfType (Kick), snare = padOfType (Snare), hat = padOfType (Hat);
+        CHECK (kick >= 0 && snare >= 0 && hat >= 0, "kick/snare/hat pads missing");
+        if (kick >= 0 && snare >= 0 && hat >= 0)
+        {
+            std::vector<int> expKick, expSnare, expHat;
+            for (int bar = 0; bar < 4; ++bar)
+            {
+                for (double b : { 0.0, 2.5 }) expKick.push_back ((int) std::lround ((bar * 4 + b) * q));
+                for (double b : { 1.0, 3.0 }) expSnare.push_back ((int) std::lround ((bar * 4 + b) * q));
+                for (double b : { 0.5, 1.5, 2.0, 3.5 }) expHat.push_back ((int) std::lround ((bar * 4 + b) * q));
+            }
+            int note = -1;
+            std::vector<int> vel;
+            CHECK (ticksOf (MidiExport::padSequence (*kit, kick, o), note, vel) == expKick, "kick MIDI timing wrong");
+            CHECK (note == 36 + kick, "kick should use its pad note");
+            CHECK (*std::max_element (vel.begin(), vel.end()) == 127 && *std::min_element (vel.begin(), vel.end()) > 90, "kick velocities off");
+            CHECK (ticksOf (MidiExport::padSequence (*kit, snare, o), note, vel) == expSnare, "snare MIDI timing wrong");
+            CHECK (ticksOf (MidiExport::padSequence (*kit, hat, o), note, vel) == expHat, "hat MIDI timing wrong");
+
+            // unquantised timing should still land within ~2 ms of the grid
+            o.quantize = 0;
+            vel.clear();
+            const auto raw = ticksOf (MidiExport::padSequence (*kit, snare, o), note, vel);
+            int worst = 0;
+            for (size_t i = 0; i < raw.size() && i < expSnare.size(); ++i) worst = juce::jmax (worst, std::abs (raw[i] - expSnare[i]));
+            std::cout << "  unquantised snare: worst offset " << worst << " ticks (" << juce::String (worst * 0.5 / q * 1000.0, 2) << " ms)\n";
+            CHECK (worst <= 4, "unquantised timing too far off");
+            o.quantize = 4;
+
+            o.noteMap = MidiOptions::generalMidi;
+            CHECK (MidiExport::noteFor (*kit, kick, o.noteMap) == 36 && MidiExport::noteFor (*kit, snare, o.noteMap) == 38
+                   && MidiExport::noteFor (*kit, hat, o.noteMap) == 42, "GM note map wrong");
+        }
+
+        auto folder = juce::File::createTempFile ("midi");
+        o.layout = MidiOptions::filePerDrum;
+        auto files = MidiExport::writeForDrag (*kit, o, folder);
+        CHECK (files.size() == (int) kit->pads.size(), "expected one MIDI file per drum, got " << files.size());
+        int totalNotes = 0;
+        for (auto& f : files)
+        {
+            juce::FileInputStream in ((juce::File (f)));
+            juce::MidiFile mf;
+            CHECK (mf.readFrom (in), "can't read back " << f);
+            CHECK (mf.getNumTracks() == 1 && mf.getTimeFormat() == q, "per-drum file layout wrong");
+            juce::MidiMessageSequence tempos;
+            mf.findAllTempoEvents (tempos);
+            CHECK (tempos.getNumEvents() == 1 && std::abs (60.0 / tempos.getEventPointer (0)->message.getTempoSecondsPerQuarterNote() - kit->bpm) < 0.01, "tempo missing in " << f);
+            for (auto* e : *mf.getTrack (0)) totalNotes += e->message.isNoteOn() ? 1 : 0;
+        }
+        std::cout << "  per-drum files: " << files.joinIntoString (", ").replace (folder.getFullPathName() + "/", "") << "\n";
+        CHECK (totalNotes == 32, "expected 32 notes across the files, got " << totalNotes);
+
+        o.layout = MidiOptions::multiTrackFile;
+        auto multi = MidiExport::writeForDrag (*kit, o, folder);
+        CHECK (multi.size() == 1, "multi-track should be a single file");
+        if (multi.size() == 1)
+        {
+            juce::FileInputStream in ((juce::File (multi[0])));
+            juce::MidiFile mf;
+            mf.readFrom (in);
+            CHECK (mf.getNumTracks() == (int) kit->pads.size() + 1, "multi-track should have a tempo track plus one per drum");
+            bool named = false;
+            for (auto* e : *mf.getTrack (1)) named |= e->message.isTrackNameEvent() && e->message.getTextFromTextMetaEvent() == kit->pads[0].name;
+            CHECK (named, "tracks should be named after the drums");
+        }
+        CHECK (MidiExport::writeForDrag (*kit, o, folder, 1).size() == 1, "single-pad drag should write one file");
+        folder.deleteRecursively();
+    }
+
+    std::cout << "7. processor: file load, MIDI playback, state round-trip\n";
     {
         auto s = makeLoop (4, true);
         auto wavFile = juce::File::createTempFile (".wav");
@@ -253,6 +349,8 @@ int main (int argc, char** argv)
             CHECK (renderNote (proc, 20) == 0.0f, "out-of-range note should be silent");
 
             proc.apvts.getParameter ("tune2")->setValueNotifyingHost (0.75f);
+            proc.midiQuantize.store (4);
+            proc.midiNoteMap.store (MidiOptions::generalMidi);
             juce::MemoryBlock state;
             proc.getStateInformation (state);
             std::cout << "  state size: " << state.getSize() / 1024 << " KiB\n";
@@ -275,12 +373,19 @@ int main (int argc, char** argv)
                     CHECK (maxDiff < 1.0e-5f, "pad " << i << " audio changed by " << maxDiff);
                 }
             CHECK (std::abs (other.apvts.getParameter ("tune2")->getValue() - 0.75f) < 1.0e-4f, "parameter should be restored");
+            CHECK (restored != nullptr && std::abs (restored->bpm - kit->bpm) < 1.0e-9, "tempo should survive");
+            if (restored != nullptr && restored->hits.size() == kit->hits.size())
+                for (size_t i = 0; i < kit->hits.size(); ++i)
+                    CHECK (restored->hits[i].seconds == kit->hits[i].seconds && restored->hits[i].velocity == kit->hits[i].velocity, "hit timing should survive");
+            CHECK (other.midiQuantize.load() == 4 && other.midiNoteMap.load() == MidiOptions::generalMidi, "MIDI options should survive");
+            CHECK (other.writeMidiForDrag().size() == (int) kit->pads.size(), "processor MIDI drag should write one file per drum");
             CHECK (renderNote (other, 36) > 0.1f, "restored kit should play");
 
             auto folder = juce::File::createTempFile ("kit");
             juce::String error;
             CHECK (other.exportKit (folder, error), "export failed: " << error);
             CHECK (folder.getNumberOfChildFiles (juce::File::findFiles, "*.wav") == (int) kit->pads.size(), "export should write one WAV per pad");
+            CHECK (folder.getChildFile ("MIDI").getNumberOfChildFiles (juce::File::findFiles, "*.mid") == (int) kit->pads.size() + 1, "export should write the MIDI files");
             folder.deleteRecursively();
 
             if (argc > 1)

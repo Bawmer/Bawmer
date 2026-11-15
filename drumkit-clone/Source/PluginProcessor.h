@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "KitAnalyzer.h"
+#include "MidiExport.h"
 #include <array>
 #include <atomic>
 
@@ -61,6 +62,16 @@ public:
     int getPadTriggerCount (int pad) const              { return padTriggerCount[(size_t) pad].load (std::memory_order_relaxed); }
 
     bool exportKit (const juce::File& folder, juce::String& error) const;
+
+    //==============================================================================
+    // MIDI drag-out: the hits of each drum as its own MIDI part
+    std::atomic<double> midiBpmOverride { 0.0 };    // 0 = use the detected tempo
+    std::atomic<int> midiQuantize { 0 }, midiNoteMap { dkc::MidiOptions::padNotes }, midiLayout { dkc::MidiOptions::filePerDrum };
+
+    double getMidiBpm() const;
+    dkc::MidiOptions getMidiOptions() const;
+    /** Writes MIDI files to a temp folder for dragging; pad = -1 for all pads. */
+    juce::StringArray writeMidiForDrag (int pad = -1) const;
     static bool writeWav (const dkc::PadSample&, const juce::File&);
 
     juce::AudioProcessorValueTreeState apvts;

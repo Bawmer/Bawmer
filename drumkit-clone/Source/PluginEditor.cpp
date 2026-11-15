@@ -31,7 +31,20 @@ struct DrumkitCloneEditor::Look : public juce::LookAndFeel_V4
         setColour (juce::Slider::textBoxTextColourId, kText);
         setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         setColour (juce::Label::textColourId, kDim);
+        setColour (juce::ComboBox::backgroundColourId, kPanelLight);
+        setColour (juce::ComboBox::textColourId, kText);
+        setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+        setColour (juce::ComboBox::arrowColourId, kDim);
+        setColour (juce::PopupMenu::backgroundColourId, kPanel);
+        setColour (juce::PopupMenu::textColourId, kText);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, kAccent.withAlpha (0.35f));
+        setColour (juce::PopupMenu::highlightedTextColourId, kText);
+        setColour (juce::TooltipWindow::backgroundColourId, kPanel);
+        setColour (juce::TooltipWindow::textColourId, kText);
     }
+
+    juce::Font getComboBoxFont (juce::ComboBox&) override              { return uiFont (12.5f); }
+    juce::Font getPopupMenuFont() override                             { return uiFont (13.0f); }
 
     juce::Font getTextButtonFont (juce::TextButton&, int) override   { return uiFont (13.0f, true); }
     juce::Font getLabelFont (juce::Label& l) override                { return l.getFont(); }
@@ -162,7 +175,15 @@ public:
         const auto& pad = kit->pads[(size_t) index];
         g.setFont (uiFont (13.5f, true));
         g.setColour (kText);
-        g.drawText (pad.name, top, juce::Justification::centredLeft);
+        g.drawText (pad.name, top.withTrimmedRight (40.0f), juce::Justification::centredLeft);
+
+        // drag handle for this drum's MIDI part
+        const auto tag = midiTagBounds().toFloat();
+        g.setColour (hoverTag ? kText : kBackground.withAlpha (0.35f));
+        g.fillRoundedRectangle (tag, 4.0f);
+        g.setColour (hoverTag ? kBackground : kText.withAlpha (0.9f));
+        g.setFont (uiFont (10.0f, true));
+        g.drawText ("MIDI", tag, juce::Justification::centred);
         g.setFont (uiFont (11.0f));
         g.setColour (kText.withAlpha (0.75f));
         g.drawText (juce::String (pad.hitCount) + (pad.hitCount == 1 ? " hit" : " hits"), bottom, juce::Justification::centredLeft);
@@ -182,12 +203,45 @@ public:
         }
     }
 
-    void mouseDown (const juce::MouseEvent&) override   { editor.padPressed (index); }
+    juce::Rectangle<int> midiTagBounds() const
+    {
+        return getLocalBounds().reduced (3).reduced (8, 6).removeFromTop (16).removeFromRight (36);
+    }
+
+    bool hasPad() const    { return editor.kit != nullptr && index < (int) editor.kit->pads.size(); }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        draggingTag = hasPad() && midiTagBounds().expanded (2).contains (e.getPosition());
+        if (draggingTag)
+            editor.selectPad (index);       // the tag selects but doesn't play
+        else
+            editor.padPressed (index);
+    }
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (e.getDistanceFromDragStart() > 12 && ! getLocalBounds().contains (e.getPosition()))
+        if (draggingTag)
+        {
+            if (e.getDistanceFromDragStart() > 6)
+                editor.dragMidiOut (index);
+        }
+        else if (e.getDistanceFromDragStart() > 12 && ! getLocalBounds().contains (e.getPosition()))
+        {
             editor.padDraggedOut (index);
+        }
+    }
+
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const bool over = hasPad() && midiTagBounds().expanded (2).contains (e.getPosition());
+        if (over != hoverTag) { hoverTag = over; repaint(); }
+        setMouseCursor (over ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseExit (const juce::MouseEvent&) override
+    {
+        if (hoverTag) { hoverTag = false; repaint(); }
     }
 
     void tick (int triggerCount)
@@ -204,6 +258,55 @@ private:
     const int index;
     int lastCount = 0;
     float flash = 0.0f;
+    bool hoverTag = false, draggingTag = false;
+};
+
+//==============================================================================
+/** Drag this onto the DAW's track area: one MIDI track per drum. */
+class DrumkitCloneEditor::MidiDragHandle : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit MidiDragHandle (DrumkitCloneEditor& e) : editor (e)
+    {
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        setTooltip ("Drag onto your DAW's tracks: one MIDI track per drum (Kick, Snare, Hat...)");
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto area = getLocalBounds().toFloat().reduced (0.5f);
+        const bool on = isEnabled();
+        g.setColour (on ? (hover ? kAccent : kAccent.withAlpha (0.85f)) : kPanelLight);
+        g.fillRoundedRectangle (area, 5.0f);
+
+        auto content = area.reduced (10.0f, 0.0f);
+        auto icon = content.removeFromLeft (16.0f).withSizeKeepingCentre (14.0f, 14.0f);
+        g.setColour (on ? kBackground : kDim);
+        for (int row = 0; row < 3; ++row)       // a tiny piano-roll
+            g.fillRoundedRectangle (icon.getX() + (float) (row * 3), icon.getY() + (float) row * 5.0f, 8.0f, 3.0f, 1.0f);
+        content.removeFromLeft (8.0f);
+        g.setFont (uiFont (13.0f, true));
+        g.drawText ("DRAG MIDI TO DAW", content, juce::Justification::centredLeft);
+    }
+
+    void mouseEnter (const juce::MouseEvent&) override  { hover = true; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override   { hover = false; repaint(); }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (isEnabled() && e.getDistanceFromDragStart() > 6)
+            editor.dragMidiOut (-1);
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (isEnabled() && ! e.mouseWasDraggedSinceMouseDown())
+            editor.infoLabel.setText ("Hold and drag this onto your DAW's track area", juce::dontSendNotification);
+    }
+
+private:
+    DrumkitCloneEditor& editor;
+    bool hover = false;
 };
 
 //==============================================================================
@@ -225,8 +328,12 @@ DrumkitCloneEditor::DrumkitCloneEditor (DrumkitCloneProcessor& p)
     for (int i = 0; i < kMaxPads; ++i)
         addAndMakeVisible (pads.add (new PadButton (*this, i)));
 
+    midiHandle = std::make_unique<MidiDragHandle> (*this);
+    addAndMakeVisible (*midiHandle);
+
     for (auto* b : { &loadButton, &exportButton, &reanalyseButton })
         addAndMakeVisible (*b);
+    exportButton.setTooltip ("Save every pad as a WAV, plus the MIDI pattern (one file per drum and a multi-track file)");
     loadButton.onClick = [this] { chooseFile(); };
     exportButton.onClick = [this] { exportKit(); };
     reanalyseButton.onClick = [this] { processor.reanalyse(); };
@@ -253,6 +360,34 @@ DrumkitCloneEditor::DrumkitCloneEditor (DrumkitCloneProcessor& p)
     setupLabel (tuneLabel, "TUNE");
     setupLabel (panLabel, "PAN");
     setupLabel (masterLabel, "MASTER");
+    setupLabel (bpmLabel, "BPM");
+    setupLabel (quantizeLabel, "QUANTIZE");
+    setupLabel (noteMapLabel, "NOTES");
+    setupLabel (layoutLabel, "FILES");
+
+    bpm.setSliderStyle (juce::Slider::IncDecButtons);
+    bpm.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 52, 22);
+    bpm.setRange (40.0, 300.0, 0.01);
+    bpm.setNumDecimalPlacesToDisplay (1);
+    bpm.setIncDecButtonsMode (juce::Slider::incDecButtonsDraggable_Vertical);
+    bpm.onValueChange = [this] { processor.midiBpmOverride.store (bpm.getValue()); };
+    addAndMakeVisible (bpm);
+
+    quantizeBox.addItemList ({ "Off", "1/8", "1/16", "1/32" }, 1);
+    quantizeBox.onChange = [this]
+    {
+        static const int steps[] = { 0, 2, 4, 8 };
+        processor.midiQuantize.store (steps[juce::jlimit (0, 3, quantizeBox.getSelectedItemIndex())]);
+    };
+    quantizeBox.setTooltip ("Snap the MIDI notes to a grid (Off keeps the original groove)");
+    noteMapBox.addItemList ({ "Pads (C1 up)", "GM drums" }, 1);
+    noteMapBox.onChange = [this] { processor.midiNoteMap.store (noteMapBox.getSelectedItemIndex()); };
+    noteMapBox.setTooltip ("Pads: plays Drumkit Clone. GM drums: Kick 36, Snare 38, Hat 42... for any drum plugin");
+    layoutBox.addItemList ({ "One per drum", "Multi-track" }, 1);
+    layoutBox.onChange = [this] { processor.midiLayout.store (layoutBox.getSelectedItemIndex()); };
+    layoutBox.setTooltip ("One per drum: a .mid per drum, each lands on its own track. Multi-track: one Type 1 .mid file");
+    for (auto* c : { &quantizeBox, &noteMapBox, &layoutBox })
+        addAndMakeVisible (*c);
     setupLabel (selectedLabel, {});
     setupLabel (infoLabel, {});
     selectedLabel.setFont (uiFont (14.0f, true));
@@ -279,8 +414,8 @@ DrumkitCloneEditor::DrumkitCloneEditor (DrumkitCloneProcessor& p)
 
     processor.addChangeListener (this);
     setResizable (true, true);
-    setResizeLimits (640, 520, 1400, 1100);
-    setSize (820, 640);
+    setResizeLimits (700, 560, 1400, 1100);
+    setSize (840, 680);
 
     refresh();
     selectPad (0);
@@ -333,6 +468,22 @@ void DrumkitCloneEditor::resized()
     row (analysisRow, separationLabel, separation);
     area.removeFromTop (8);
 
+    auto midiRow = area.removeFromTop (28);
+    midiHandle->setBounds (midiRow.removeFromLeft (176));
+    midiRow.removeFromLeft (16);
+    const int unit = midiRow.getWidth() / 4;
+    auto option = [unit, &midiRow] (juce::Label& label, juce::Component& c, int labelWidth)
+    {
+        auto r = midiRow.removeFromLeft (unit);
+        label.setBounds (r.removeFromLeft (labelWidth));
+        c.setBounds (r.withTrimmedRight (10).reduced (0, 2));
+    };
+    option (bpmLabel, bpm, 34);
+    option (quantizeLabel, quantizeBox, 68);
+    option (noteMapLabel, noteMapBox, 48);
+    option (layoutLabel, layoutBox, 42);
+    area.removeFromTop (8);
+
     auto padRow = area.removeFromBottom (58);
     selectedLabel.setBounds (padRow.removeFromTop (24));
     padRow.removeFromTop (4);
@@ -367,6 +518,17 @@ void DrumkitCloneEditor::refresh()
         infoLabel.setText ({}, juce::dontSendNotification);
 
     exportButton.setEnabled (hasKit);
+    midiHandle->setEnabled (hasKit);
+    for (auto* c : std::initializer_list<juce::Component*> { &bpm, &quantizeBox, &noteMapBox, &layoutBox })
+        c->setEnabled (hasKit);
+    bpm.setValue (processor.getMidiBpm(), juce::dontSendNotification);
+    bpm.setTooltip (hasKit ? "Tempo the MIDI is written at. Detected: " + juce::String (kit->bpm, 1) + " BPM" : juce::String());
+    {
+        const int q = processor.midiQuantize.load();
+        quantizeBox.setSelectedItemIndex (q == 2 ? 1 : q == 4 ? 2 : q == 8 ? 3 : 0, juce::dontSendNotification);
+        noteMapBox.setSelectedItemIndex (processor.midiNoteMap.load(), juce::dontSendNotification);
+        layoutBox.setSelectedItemIndex (processor.midiLayout.load(), juce::dontSendNotification);
+    }
     reanalyseButton.setEnabled (processor.canReanalyse() && ! processor.isAnalysing());
     sensitivity.setValue (processor.sensitivity.load() * 100.0, juce::dontSendNotification);
     separation.setValue (processor.separation.load() * 100.0, juce::dontSendNotification);
@@ -393,7 +555,7 @@ void DrumkitCloneEditor::selectPad (int pad)
 
     const auto note = juce::MidiMessage::getMidiNoteName (DrumkitCloneProcessor::firstNote + selectedPad, true, true, 3);
     selectedLabel.setText (filled ? "PAD " + juce::String (selectedPad + 1) + "  -  " + kit->pads[(size_t) selectedPad].name.toUpperCase()
-                                        + "  -  " + note + "   (drag a pad out to drop its WAV into your DAW)"
+                                        + "  -  " + note + "   (drag the pad for its WAV, its MIDI tag for its notes)"
                                   : juce::String ("PAD " + juce::String (selectedPad + 1) + "  -  empty"),
                            juce::dontSendNotification);
     selectedLabel.setColour (juce::Label::textColourId, filled ? padColour (selectedPad) : kDim);
@@ -422,6 +584,24 @@ void DrumkitCloneEditor::padDraggedOut (int pad)
     juce::Component::SafePointer<DrumkitCloneEditor> safe (this);
     if (! performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
                                           [safe] { if (safe != nullptr) safe->draggingOut = false; }))
+        draggingOut = false;
+}
+
+void DrumkitCloneEditor::dragMidiOut (int pad)
+{
+    if (draggingOut || kit == nullptr || kit->pads.empty())
+        return;
+
+    const auto files = processor.writeMidiForDrag (pad);
+    if (files.isEmpty())
+    {
+        infoLabel.setText ("Couldn't write the MIDI files", juce::dontSendNotification);
+        return;
+    }
+
+    draggingOut = true;
+    juce::Component::SafePointer<DrumkitCloneEditor> safe (this);
+    if (! performExternalDragDropOfFiles (files, false, this, [safe] { if (safe != nullptr) safe->draggingOut = false; }))
         draggingOut = false;
 }
 
