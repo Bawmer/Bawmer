@@ -66,7 +66,16 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
         const v = document.getElementById('preview').getBoundingClientRect();
         return { comp: document.getElementById('stage').classList.contains('composite'), w: v.width, h: v.height };
       });
-      assert(st.comp && Math.abs(st.w - st.h) < 1.5, 'studio preview shows the DAW screen with the camera in a square box');
+      assert(st.comp, 'studio preview shows the DAW screen and the camera together');
+      const two = await desk.evaluate(() => {
+        const a = document.getElementById('screenMain').getBoundingClientRect(), b = document.getElementById('preview').getBoundingClientRect();
+        return { split: document.getElementById('stage').classList.contains('split'), overlap: a.right > b.left + 1 && b.right > a.left + 1, ratio: a.width / b.width };
+      });
+      assert(two.split && !two.overlap && Math.abs(two.ratio - 2) < 0.05, 'default is two screens side by side: DAW (2/3) + camera (1/3), no overlap');
+      await desk.click('#layoutStudio [data-v="pip"]');
+      const sq = await desk.evaluate(() => { const r = document.getElementById('preview').getBoundingClientRect(); return r.width > 20 && Math.abs(r.width - r.height) < 1.5; });
+      assert(sq, 'square box layout is still available');
+      await desk.click('#layoutStudio [data-v="split"]');
     }
     await desk.click('#recBtn');
     await desk.waitForSelector('#recBadge:not([hidden])');
@@ -102,10 +111,11 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     await desk.click('#edPlay'); await sleep(1500);
     assert(await desk.evaluate(() => !document.getElementById('edAudio').paused && document.getElementById('edCam').currentTime > 0), 'editor preview plays audio and video together');
     await desk.click('#edPlay');
-    assert(await desk.evaluate(() => document.getElementById('player').dataset.layout === 'pip' && !document.getElementById('pipRow').hidden),
-      'editor defaults to full DAW screen + square camera');
-    const box = await desk.evaluate(() => { const r = document.querySelector('.ed-cam-wrap').getBoundingClientRect(); return { w: r.width, h: r.height }; });
-    assert(Math.abs(box.w - box.h) < 1.5 && box.w > 40, `camera box in the editor is square (${box.w.toFixed(0)}×${box.h.toFixed(0)})`);
+    const ed = await desk.evaluate(() => {
+      const a = document.getElementById('edScreen').getBoundingClientRect(), b = document.querySelector('.ed-cam-wrap').getBoundingClientRect();
+      return { layout: document.getElementById('player').dataset.layout, overlap: a.right > b.left + 1 && b.right > a.left + 1, swap: !document.getElementById('swapSides').hidden };
+    });
+    assert(ed.layout === 'split' && !ed.overlap && ed.swap, 'editor opens with the same two-screen layout');
     await desk.click('#aspectSeg [data-v="16:9"]');
     await desk.selectOption('#qualSel', '720');
     if (shots) { await sleep(400); await desk.screenshot({ path: path.join(shots, 'editor.png') }); }

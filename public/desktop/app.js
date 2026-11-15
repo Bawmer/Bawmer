@@ -1,4 +1,4 @@
-import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, dragToCorner } from './util.js';
+import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner } from './util.js';
 import { AudioEngine, clockNow } from './audio-engine.js';
 import { initEditor, openSession, refreshSessions, onExportMessage } from './editor.js';
 
@@ -14,7 +14,7 @@ const MODES = {
 const engine = new AudioEngine();
 const S = {
   app: null, ws: null, phone: false, cam: null, pc: null, pendingIce: [],
-  mode: 'studio', rotation: 0, pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
+  mode: 'studio', rotation: 0, layout: 'split', splitSide: 'right', pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
   rec: null, // { id, pauses, pausedAt, cameraStartMs, cameraMarkers, screenStartMs, stopping }
   waiters: new Map(), calEdges: null, savedOnce: false,
 };
@@ -162,17 +162,29 @@ function layoutPreview() {
   const sw = stage.clientWidth, sh = stage.clientHeight;
   const rot = S.rotation % 180 !== 0;
   const comp = composite();
+  const split = comp && S.layout === 'split';
   stage.classList.toggle('composite', comp);
-  $('pipRowStudio').hidden = !comp;
+  stage.classList.toggle('split', split);
+  $('layoutRowStudio').hidden = !comp;
+  $('pipRowStudio').hidden = !comp || split;
+  $('swapStudio').hidden = !split;
+  setSeg($('layoutStudio'), S.layout);
   setSeg($('pipSizeStudio'), S.pipSize);
   setSeg($('pipCornerStudio'), S.pipCorner);
   if (comp) {
-    // The 16:9 frame of the final video: full DAW screen, camera in a square box.
+    // The 16:9 frame of the final video, exactly as it will be exported.
     const cw = Math.min(sw, (sh * 16) / 9), ch = (cw * 9) / 16;
     const cx = (sw - cw) / 2, cy = (sh - ch) / 2;
-    Object.assign(scr.style, { left: `${cx}px`, top: `${cy}px`, width: `${cw}px`, height: `${ch}px` });
-    const b = pipBox(cw, ch, S.pipSize, S.pipCorner);
-    Object.assign(v.style, { left: `${cx + b.x}px`, top: `${cy + b.y}px`, width: `${b.size}px`, height: `${b.size}px`, transform: `rotate(${S.rotation}deg)` });
+    if (split) {
+      // Two screens: complete DAW in one panel, you in the other.
+      const sb = splitBoxes(cw, ch, S.splitSide);
+      Object.assign(scr.style, { left: `${cx + sb.scr.x}px`, top: `${cy + sb.scr.y}px`, width: `${sb.scr.w}px`, height: `${sb.scr.h}px` });
+      placeVideo(v, sb.cam, S.rotation, cx, cy);
+    } else {
+      Object.assign(scr.style, { left: `${cx}px`, top: `${cy}px`, width: `${cw}px`, height: `${ch}px` });
+      const b = pipBox(cw, ch, S.pipSize, S.pipCorner);
+      placeVideo(v, { x: b.x, y: b.y, w: b.size, h: b.size }, S.rotation, cx, cy);
+    }
     $('rotOut').textContent = `${S.rotation}°`;
     $('guide').hidden = true;
     return;
@@ -488,7 +500,7 @@ async function stopRecording() {
       cameraMarkers: r.cameraMarkers, screenStartMs: r.screenStartMs, pauses: r.pauses, calibration: S.calibration,
     },
     camera: { width: c.width, height: c.height, fps: Math.round(c.fps || 30), rotation: S.rotation },
-    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner },
+    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
   });
   toast('Saving session…');
   try {
@@ -580,7 +592,7 @@ function savePrefs() {
   api('/api/settings', 'PUT', { prefs: {
     source: $('srcSel').value, sampleRate: $('rateSel').value, bitDepth: $('bitSel').value,
     mode: S.mode, rotation: S.rotation, mic: $('micOn').checked,
-    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource,
+    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, layout: S.layout, splitSide: S.splitSide,
   } }).catch(() => {});
 }
 
@@ -714,6 +726,8 @@ async function init() {
   if (p.bitDepth) $('bitSel').value = p.bitDepth;
   S.rotation = Number(p.rotation) || 0;
   if (p.pipSize) S.pipSize = p.pipSize;
+  if (p.layout === 'pip' || p.layout === 'split') S.layout = p.layout;
+  if (p.splitSide) S.splitSide = p.splitSide;
   if (p.pipCorner) S.pipCorner = p.pipCorner;
   S.screenSource = p.screenSource || null;
   $('micOn').checked = !!p.mic;
@@ -748,7 +762,9 @@ async function init() {
   $('rotateBtn').onclick = () => { S.rotation = (S.rotation + 90) % 360; layoutPreview(); savePrefs(); };
   segmented($('pipSizeStudio'), (v) => { S.pipSize = v; layoutPreview(); savePrefs(); });
   segmented($('pipCornerStudio'), (v) => { S.pipCorner = v; layoutPreview(); savePrefs(); });
-  dragToCorner($('preview'), () => (composite() ? $('screenMain') : null), (c) => { S.pipCorner = c; layoutPreview(); savePrefs(); });
+  segmented($('layoutStudio'), (v) => { S.layout = v; layoutPreview(); savePrefs(); });
+  $('swapStudio').onclick = () => { S.splitSide = S.splitSide === 'left' ? 'right' : 'left'; layoutPreview(); savePrefs(); };
+  dragToCorner($('preview'), () => (composite() && S.layout === 'pip' ? $('screenMain') : null), (c) => { S.pipCorner = c; layoutPreview(); savePrefs(); });
   $('screenOn').addEventListener('change', renderAudio);
   $('screenSrcBtn').onclick = async () => {
     try {

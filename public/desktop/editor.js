@@ -1,5 +1,5 @@
 // Session library and editor: preview, trim, sync adjustment and export.
-import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce, pipBox, dragToCorner } from './util.js';
+import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner } from './util.js';
 
 let E = null; // the open session: { id, project, peaks, edit, dur }
 let drag = null;
@@ -85,6 +85,7 @@ function renderEdit() {
   p.dataset.aspect = e.aspect;
   p.dataset.layout = !pr.screen ? 'camera' : !pr.camera ? 'screen' : e.layout;
   $('pipRow').hidden = p.dataset.layout !== 'pip';
+  $('swapSides').hidden = p.dataset.layout !== 'split';
   setSeg($('pipSizeSeg'), e.pipSize || 'small');
   setSeg($('pipCornerSeg'), e.pipCorner || 'br');
   layoutCam();
@@ -92,24 +93,21 @@ function renderEdit() {
 
 function layoutCam() {
   if (!E) return;
-  const wrap = document.querySelector('.ed-cam-wrap'), v = $('edCam');
-  const rot = (E.edit.rotation || 0) % 180 !== 0;
-  const c = E.project.camera || {};
-  const vw = v.videoWidth || c.width || 16, vh = v.videoHeight || c.height || 9;
-  $('player').style.setProperty('--cam-ar', rot ? `${vh}/${vw}` : `${vw}/${vh}`);
-  if ($('player').dataset.layout === 'pip') {
-    // Same square box, size and corner as the export.
-    const P = $('player');
-    const b = pipBox(P.clientWidth, P.clientHeight, E.edit.pipSize, E.edit.pipCorner);
-    Object.assign(wrap.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.size}px`, height: `${b.size}px` });
-  } else {
-    wrap.style.left = wrap.style.top = wrap.style.width = wrap.style.height = '';
+  const P = $('player'), wrap = document.querySelector('.ed-cam-wrap'), v = $('edCam'), scr = $('edScreen');
+  const layout = P.dataset.layout, W = P.clientWidth, H = P.clientHeight;
+  const place = (el, b) => Object.assign(el.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+  scr.style.left = scr.style.top = scr.style.width = scr.style.height = '';
+  wrap.style.left = wrap.style.top = wrap.style.width = wrap.style.height = '';
+  // Same boxes as the export, so what you see is what you get.
+  if (layout === 'pip') {
+    const b = pipBox(W, H, E.edit.pipSize, E.edit.pipCorner);
+    place(wrap, { x: b.x, y: b.y, w: b.size, h: b.size });
+  } else if (layout === 'split') {
+    const sb = splitBoxes(W, H, E.edit.splitSide);
+    place(scr, sb.scr);
+    place(wrap, sb.cam);
   }
-  const w = wrap.clientWidth, h = wrap.clientHeight;
-  Object.assign(v.style, {
-    inset: 'auto', left: '50%', top: '50%', width: `${rot ? h : w}px`, height: `${rot ? w : h}px`,
-    transform: `translate(-50%, -50%) rotate(${E.edit.rotation || 0}deg)`,
-  });
+  placeVideo(v, { x: 0, y: 0, w: wrap.clientWidth, h: wrap.clientHeight }, E.edit.rotation);
 }
 
 const saveEdit = debounce(() => { if (E) api(`/api/sessions/${E.id}`, 'PATCH', { edit: E.edit }).catch(() => {}); }, 400);
@@ -277,6 +275,7 @@ export function initEditor() {
   $('edFps').onchange = () => setEdit({ fps: Number($('edFps').value) });
   $('layoutSel').onchange = () => setEdit({ layout: $('layoutSel').value });
   segmented($('pipSizeSeg'), (v) => setEdit({ pipSize: v }));
+  $('swapSides').onclick = () => setEdit({ splitSide: E.edit.splitSide === 'left' ? 'right' : 'left' });
   segmented($('pipCornerSeg'), (v) => setEdit({ pipCorner: v }));
   dragToCorner(document.querySelector('.ed-cam-wrap'),
     () => (E && $('player').dataset.layout === 'pip' ? $('player') : null),

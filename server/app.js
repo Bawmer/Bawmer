@@ -23,7 +23,7 @@ const TYPES = {
   '.wav': 'audio/wav', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
 };
 const MODE_DEFAULTS = {
-  studio: { aspect: '16:9', layout: 'pip' },
+  studio: { aspect: '16:9', layout: 'split' },
   performance: { aspect: '16:9', layout: 'camera' },
   tutorial: { aspect: '16:9', layout: 'split' },
   social: { aspect: '9:16', layout: 'camera' },
@@ -165,7 +165,7 @@ async function start(opts = {}) {
       p.edit = {
         trimStart: 0, trimEnd: p.duration, manualOffsetMs: 0, rotation: Number(cm.rotation) || 0,
         quality: 1080, fps: [24, 30, 60].includes(cm.fps) ? cm.fps : 30, includeMic: !!p.mic,
-        pipSize: 'small', pipCorner: 'br',
+        pipSize: 'small', pipCorner: 'br', splitSide: 'right',
         ...MODE_DEFAULTS[p.mode], ...(msg.preset || {}),
       };
       p.status = 'ready';

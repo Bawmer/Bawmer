@@ -71,6 +71,27 @@ export function debounce(fn, ms) {
 // (pipBox), so the previews show exactly what the export will contain.
 const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
 const even = (n) => Math.round(n / 2) * 2;
+/** Side by side: complete DAW in one panel, camera in the other (server/exporter.js splitBoxes). */
+export function splitBoxes(w, h, side) {
+  const camFirst = side === 'left';
+  if (w > h) {
+    const cw = even(w / 3), sw = w - cw;
+    return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
+  }
+  const sh = Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
+  return { scr: { x: 0, y: camFirst ? ch : 0, w, h: sh }, cam: { x: 0, y: camFirst ? 0 : sh, w, h: ch }, wide: false, camFirst };
+}
+
+/** Position a (possibly 90°-rotated) video so it exactly covers a box. */
+export function placeVideo(el, box, rotation, offsetX = 0, offsetY = 0) {
+  const rot = (rotation || 0) % 180 !== 0;
+  const ew = rot ? box.h : box.w, eh = rot ? box.w : box.h;
+  Object.assign(el.style, {
+    left: `${offsetX + box.x + box.w / 2 - ew / 2}px`, top: `${offsetY + box.y + box.h / 2 - eh / 2}px`,
+    width: `${ew}px`, height: `${eh}px`, transform: `rotate(${rotation || 0}deg)`,
+  });
+}
+
 export function pipBox(w, h, size, corner) {
   const s = even(Math.min(w, h) * (PIP_SIZES[size] || PIP_SIZES.small));
   const m = even(Math.min(w, h) * 0.03);

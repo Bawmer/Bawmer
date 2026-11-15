@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { WavWriter, HEADER_BYTES } = require('../../server/wav');
 const { computeSync, keepSegments } = require('../../server/sync');
-const { buildMp4Args, canvasSize, pipBox } = require('../../server/exporter');
+const { buildMp4Args, canvasSize, pipBox, splitBoxes } = require('../../server/exporter');
 
 test('wav writer produces a valid 24-bit header and samples', () => {
   const file = path.join(os.tmpdir(), `dlc-${process.pid}.wav`);
@@ -70,4 +70,20 @@ test('square camera box: sizes and corners', () => {
   assert.deepEqual(pipBox(1920, 1080, 'large', 'tl'), { size: 496, x: 32, y: 32 });
   assert.deepEqual(pipBox(1080, 1920, 'medium', 'tr'), { size: 388, x: 660, y: 32 });
   assert.deepEqual(pipBox(1280, 720, undefined, 'nope'), pipBox(1280, 720, 'small', 'br'));
+});
+
+test('side by side: complete DAW panel + camera panel, no overlap', () => {
+  const w = splitBoxes(1920, 1080, 'right');
+  assert.deepEqual(w.scr, { x: 0, y: 0, w: 1280, h: 1080 });
+  assert.deepEqual(w.cam, { x: 1280, y: 0, w: 640, h: 1080 });
+  assert.equal(splitBoxes(1920, 1080, 'left').cam.x, 0);
+  const t = splitBoxes(1080, 1920, 'right');
+  assert.deepEqual(t.scr, { x: 0, y: 0, w: 1080, h: 608 });
+  assert.deepEqual(t.cam, { x: 0, y: 608, w: 1080, h: 1312 });
+  const project = { audio: { file: 'a.wav' }, camera: { file: 'c.mp4' }, screen: { file: 's.webm' }, timing: {}, sync: {} };
+  const { args } = buildMp4Args(project, '/s', { trimStart: 0, trimEnd: 5, aspect: '16:9', quality: 1080, fps: 30, layout: 'split', splitSide: 'left' }, '/o.mp4');
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.match(graph, /\[scr\]scale=1280:1080:force_original_aspect_ratio=decrease/); // DAW never cropped
+  assert.match(graph, /\[cam\]scale=640:1080:force_original_aspect_ratio=increase,crop=640:1080/);
+  assert.match(graph, /\[b\]\[a\]hstack=inputs=2\[v\]/);
 });

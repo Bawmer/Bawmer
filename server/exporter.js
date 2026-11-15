@@ -21,6 +21,20 @@ const even = (n) => Math.round(n / 2) * 2;
 // Square camera box over the full DAW screen. Keep in sync with
 // public/desktop/util.js (pipBox), which draws the same box in the previews.
 const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
+// Side by side: the complete DAW in one panel, the camera in the other.
+// Wide canvases put the camera in a third of the width (left or right);
+// tall/square canvases stack them, with a full-width 16:9 DAW panel.
+// Keep in sync with public/desktop/util.js (splitBoxes).
+function splitBoxes(w, h, side) {
+  const camFirst = side === 'left';
+  if (w > h) {
+    const cw = even(w / 3), sw = w - cw;
+    return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
+  }
+  const sh = Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
+  return { scr: { x: 0, y: camFirst ? ch : 0, w, h: sh }, cam: { x: 0, y: camFirst ? 0 : sh, w, h: ch }, wide: false, camFirst };
+}
+
 function pipBox(w, h, size, corner) {
   const s = even(Math.min(w, h) * (PIP_SIZES[size] || PIP_SIZES.small));
   const m = even(Math.min(w, h) * 0.03);
@@ -98,14 +112,10 @@ function buildMp4Args(project, dir, edit, outFile) {
     chains.push(`[scr]${fit(w, h)}[bg]`,
       `[cam]${fill(inner, inner)},pad=${box.size}:${box.size}:${b}:${b}:color=0x2ff3e0[pip]`,
       `[bg][pip]overlay=${box.x}:${box.y}[v]`);
-  } else { // split: side by side on wide canvases, stacked otherwise
-    if (w > h) {
-      const cw = even(w * 0.34);
-      chains.push(`[scr]${fill(w - cw, h)}[a]`, `[cam]${fill(cw, h)}[b]`, `[a][b]hstack=inputs=2[v]`);
-    } else {
-      const sh = even(h * 0.42);
-      chains.push(`[scr]${fill(w, sh)}[a]`, `[cam]${fill(w, h - sh)}[b]`, `[a][b]vstack=inputs=2[v]`);
-    }
+  } else { // split: complete DAW + camera, side by side (or stacked on tall canvases)
+    const sb = splitBoxes(w, h, e.splitSide);
+    chains.push(`[scr]${fit(sb.scr.w, sb.scr.h)}[a]`, `[cam]${fill(sb.cam.w, sb.cam.h)}[b]`,
+      `${sb.camFirst ? '[b][a]' : '[a][b]'}${sb.wide ? 'hstack' : 'vstack'}=inputs=2[v]`);
   }
 
   // Audio: sample-accurate cuts, never time-stretched.
@@ -176,4 +186,4 @@ async function remux(src, dst, isMp4) {
   await runFfmpeg(args);
 }
 
-module.exports = { pipBox, buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };
+module.exports = { pipBox, splitBoxes, buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };

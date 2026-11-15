@@ -106,6 +106,10 @@
             <input type="range" id="focus" min="0" max="1" step="0.01" value="0" disabled>
           </div>
         </label>
+        <label id="layoutRowStudio" hidden>Picture
+          <div class="seg" id="layoutStudio"><button data-v="split">Side by side</button><button data-v="pip">Square box</button></div>
+        </label>
+        <button class="btn" id="swapStudio" hidden>⇄ Swap DAW and camera</button>
         <div class="row2" id="pipRowStudio" hidden>
           <label>Camera box
             <div class="seg" id="pipSizeStudio"><button data-v="small">S</button><button data-v="medium">M</button><button data-v="large">L</button></div>
@@ -222,12 +226,13 @@
             </div>
             <label id="layoutRow">Layout
               <select id="layoutSel">
-                <option value="pip">Full DAW screen + square camera</option>
-                <option value="split">Screen and camera split</option>
+                <option value="split">Side by side: DAW + camera</option>
+                <option value="pip">DAW + small square camera</option>
                 <option value="camera">Camera only</option>
                 <option value="screen">Screen only</option>
               </select>
             </label>
+            <button class="btn" id="swapSides">⇄ Swap DAW and camera</button>
             <div class="row2" id="pipRow">
               <label>Camera box
                 <div class="seg" id="pipSizeSeg"><button data-v="small">S</button><button data-v="medium">M</button><button data-v="large">L</button></div>

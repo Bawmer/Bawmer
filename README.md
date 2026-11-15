@@ -26,8 +26,10 @@ npm run dist       # build installers (electron-builder)
 2. Choose the audio **Source**, then **Connect DAW audio** (see *Routing help* in the app).
 3. Leave **Capture the DAW screen** ticked (Studio Session). In the Windows app a
    picker opens: choose your **DAW window** (or a whole screen). The preview then
-   shows the final picture — your complete DAW with you in a small square box.
-   Drag the box to any corner, or pick its size (S / M / L) in the Camera card.
+   shows the final picture as two screens side by side: your complete DAW and
+   you talking. Use *Swap DAW and camera* to change sides, or switch *Picture* to
+   *Square box* for a small square camera over the full DAW (S / M / L, drag to
+   any corner).
 4. Press **Record**. Pause/resume as needed, press again to stop.
 5. The session opens in **Sessions**: preview, trim, fine-tune sync, export.
 
@@ -41,7 +43,7 @@ npm run dist       # build installers (electron-builder)
 | Audio sources | Windows: system loopback (WASAPI) with one click. Any OS: virtual drivers (BlackHole, Loopback, VB-CABLE, VoiceMeeter) or an interface's loopback input. Works with Ableton Live, FL Studio, Logic Pro, Pro Tools, Cubase, Studio One, Reaper, Bitwig — anything that plays through an audio device. |
 | Sync | Phone and desktop clocks are synchronised continuously; audio is stamped by sample count. Markers every 5 s measure clock drift, which is corrected on long takes by retiming the video (audio is never stretched). A flash/click calibration tool measures camera and audio latency; a ±500 ms manual adjustment is available in the editor. |
 | Modes | Studio Session (camera + DAW screen), Performance (camera), Tutorial (screen + camera split), Social Media (9:16 with a framing guide). |
-| Editor | Preview, trim, sync adjust, rotate; layouts: **full DAW screen + square camera** (default; box size and corner adjustable, the screen is never cropped), camera, screen, split; export MP4 (H.264/AAC) in 16:9, 9:16, 1:1 at 720p–4K, and WAV in the original format. Edits are saved with the project. |
+| Editor | Preview, trim, sync adjust, rotate; layouts: **side by side — complete DAW + camera** (default; swap sides; stacked for 9:16), DAW + small square camera (size and corner adjustable), camera, screen. The DAW is never cropped; export MP4 (H.264/AAC) in 16:9, 9:16, 1:1 at 720p–4K, and WAV in the original format. Edits are saved with the project. |
 | Privacy | Everything stays on your machine and local network. No cloud, no accounts, no STUN/TURN servers. The desktop API only answers on `127.0.0.1`; the phone needs the pairing token. |
 
 Recordings live in `Videos/DAW Live Cam/Sessions/<id>/` (`~/DAW Live Cam` with
