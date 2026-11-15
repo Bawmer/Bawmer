@@ -152,6 +152,14 @@ input[type=checkbox] { accent-color: var(--cyan); width: 14px; height: 14px; mar
 .divider::before { content: ""; position: absolute; left: 3px; top: 50%; width: 8px; height: 34px; margin-top: -17px; border-radius: 4px; background: var(--cyan); box-shadow: 0 0 10px #2ff3e088; }
 .empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 #camSrcSeg button { padding: 6px 8px; }
+.txt { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 7px; padding: 7px 8px; width: 100%; outline: none; color: var(--text); font-size: 12px; }
+.txt::placeholder { color: var(--faint); }
+.live-btn { font-weight: 600; }
+.live-btn:not(:disabled) { border-color: #ff3b5c88; color: #ffd0d8; background: #ff3b5c18; }
+.live-btn.on { background: #ff3b5c; color: #fff; border-color: #ff3b5c; box-shadow: 0 0 18px #ff3b5c66; }
+.live-preview { width: 100%; max-height: 260px; object-fit: contain; background: #000; border-radius: 8px; border: 1px solid var(--line-2); }
+#livePlat button { padding: 6px 4px; }
+.state.live { color: var(--red); font-weight: 700; letter-spacing: .08em; }
 .corners button { padding: 5px 0; font-size: 13px; }
 .screen-src { display: flex; align-items: center; gap: 8px; background: var(--panel-2); border-radius: 8px; padding: 4px 4px 4px 10px; font-size: 11px; color: var(--dim); }
 .screen-src span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

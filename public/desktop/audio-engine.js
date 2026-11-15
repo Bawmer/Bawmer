@@ -24,6 +24,8 @@ export class AudioEngine extends EventTarget {
     await ctx.audioWorklet.addModule('capture-worklet.js');
     this.ctx = ctx;
     this.streams = [dawStream, micStream].filter(Boolean);
+    this.sources = [];
+    this.liveDest = null;
     const sink = ctx.createGain();
     sink.gain.value = 0; // pull the graph without ever monitoring (no feedback)
     sink.connect(ctx.destination);
@@ -32,7 +34,9 @@ export class AudioEngine extends EventTarget {
         numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
         channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
       });
-      ctx.createMediaStreamSource(stream).connect(node).connect(sink);
+      const src = ctx.createMediaStreamSource(stream);
+      this.sources.push(src);
+      src.connect(node).connect(sink);
       node.port.onmessage = (e) => this._onBatch(kind, e.data.frame, e.data.samples);
       return node;
     };
@@ -51,6 +55,8 @@ export class AudioEngine extends EventTarget {
     this.rec = null;
     for (const s of this.streams) s.getAudioTracks().forEach((t) => t.stop());
     this.streams = [];
+    this.sources = [];
+    this.liveDest = null;
     this._offsets = [];
     await ctx.close().catch(() => {});
   }
@@ -131,6 +137,17 @@ export class AudioEngine extends EventTarget {
       tracks: { [KIND.DAW]: { frames: 0, done: false }, ...(this.hasMic ? { [KIND.MIC]: { frames: 0, done: false } } : {}) },
     };
     return { startFrame, startMs: this.frameToClock(startFrame) };
+  }
+
+  /** DAW audio (plus the microphone, if connected) as a stream for going live. */
+  liveAudio() {
+    if (!this.ctx) return null;
+    if (!this.liveDest) {
+      this.liveDest = this.ctx.createMediaStreamDestination();
+      this.liveDest.channelCount = 2;
+      for (const s of this.sources) s.connect(this.liveDest);
+    }
+    return this.liveDest.stream;
   }
 
   /** Seconds of audio recorded so far (position on the session timeline). */

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DAW LIVE CAM controls</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font: 600 13px "Inter", "Segoe UI", system-ui, sans-serif; color: #e9ebf3; user-select: none; }
+  .bar { -webkit-app-region: drag; position: absolute; inset: 4px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px;
+    background: #11131bf2; border: 1px solid #2f3447; border-radius: 12px; box-shadow: 0 6px 24px #000a; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #ff3b5c; box-shadow: 0 0 10px #ff3b5c; animation: b 1s infinite; flex: none; }
+  .paused .dot { background: #ffb648; box-shadow: none; animation: none; }
+  .live { color: #ff3b5c; letter-spacing: .1em; font-size: 11px; border: 1px solid #ff3b5c88; border-radius: 6px; padding: 2px 6px; }
+  #time { font: 600 15px ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; min-width: 70px; }
+  .sp { flex: 1; }
+  button { -webkit-app-region: no-drag; background: #1c2030; color: #e9ebf3; border: 1px solid #3a4057; border-radius: 8px; height: 32px; min-width: 32px; padding: 0 8px; cursor: pointer; font: inherit; }
+  button:hover { border-color: #5a6280; }
+  #stop { background: #ff3b5c22; border-color: #ff3b5c; color: #ffd0d8; }
+  @keyframes b { 50% { opacity: .3; } }
+</style>
+</head>
+<body>
+<div class="bar" id="bar">
+  <i class="dot"></i>
+  <span id="time">00:00:00</span>
+  <span class="live" id="live" hidden>LIVE</span>
+  <span class="sp"></span>
+  <button id="pause" title="Pause / resume (Ctrl+Alt+P)">❚❚</button>
+  <button id="stop" title="Stop (Ctrl+Alt+R)">■ Stop</button>
+  <button id="show" title="Show the dashboard (Ctrl+Alt+D)">⤢</button>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let state = {};
+  window.dlcMini.onStatus((s) => {
+    state = s || {};
+    $('time').textContent = s.time || '00:00:00';
+    $('live').hidden = !s.live;
+    $('pause').hidden = !s.recording;
+    $('pause').textContent = s.paused ? '▶' : '❚❚';
+    $('bar').classList.toggle('paused', !!s.paused);
+  });
+  $('pause').onclick = () => window.dlcMini.command('pause');
+  $('stop').onclick = () => window.dlcMini.command(state.recording ? 'stop' : 'live-stop');
+  $('show').onclick = () => window.dlcMini.command('show');
+</script>
+</body>
+</html>

@@ -29,12 +29,32 @@ npm run dist       # build installers (electron-builder)
 3. Leave **Capture the DAW screen** ticked (Studio Session). In the Windows app a
    picker opens: choose your **DAW window** (or a whole screen). The preview then
    shows the final picture as two screens side by side: your complete DAW and
-   you talking. Drag the line between them (or use *Camera size*) to resize,
+   you talking (default: you in a square box over the full DAW — switch *Picture* to *Side by side* for two panels). Drag the line between them (or use *Camera size*) to resize,
    use *Swap DAW and camera* to change sides, or switch *Picture* to
    *Square box* for a small square camera over the full DAW (S / M / L, drag to
    any corner).
-4. Press **Record**. Pause/resume as needed, press again to stop.
+4. Press **Record**. The dashboard minimises itself so the full-screen DAW is
+   captured cleanly; a small floating bar (left out of the recording) shows the
+   time with Pause / Stop / Show buttons. Shortcuts from inside the DAW:
+   **Ctrl+Alt+R** record/stop, **Ctrl+Alt+P** pause, **Ctrl+Alt+D** dashboard.
+   Untick *Minimise this window while recording or live* to keep it open.
 5. The session opens in **Sessions**: preview, trim, fine-tune sync, export.
+
+## Live on Instagram or TikTok
+
+The **Live stream** card sends the same picture (DAW + you) with the DAW audio.
+
+- **Instagram:** on instagram.com (computer) → Create → Live video → copy the
+  *Stream URL* and *Stream key*. Press **Go live** here, then Go live on
+  Instagram once its preview shows you. Keys are new for every broadcast.
+- **TikTok:** needs LIVE access with a stream key (LIVE Center / LIVE Studio →
+  Stream key). Copy the *Server URL* and *Stream key*. Not every account gets one.
+- **Other:** any RTMP/RTMPS server (YouTube, Twitch, Facebook, Restream…).
+
+Vertical 9:16 puts the DAW across the top and you below (or the studio
+picture, if chosen); 720p at 4 Mbps or 1080p at 6 Mbps, H.264 + AAC, 2 s
+keyframes. A dropped connection is retried automatically (5 times). You can
+record and stream at the same time. Stream keys are saved only on this computer.
 
 ## What it does
 

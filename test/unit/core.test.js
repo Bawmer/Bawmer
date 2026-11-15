@@ -95,3 +95,15 @@ test('resizing: camera share and box size are adjustable and clamped', () => {
   assert.equal(pipBox(1920, 1080, 0.5, 'br').size, 540);
   assert.equal(pipBox(1920, 1080, 2, 'br').size, 648); // max 60 %
 });
+
+test('live: target URL, validation and ffmpeg arguments', () => {
+  const { targetUrl, validTarget, buildLiveArgs } = require('../../server/live');
+  assert.equal(targetUrl('rtmps://edgetee-upload.example:443/rtmp/', 'KEY'), 'rtmps://edgetee-upload.example:443/rtmp/KEY');
+  assert.equal(targetUrl('rtmp://push.example/game', 'KEY'), 'rtmp://push.example/game/KEY');
+  assert.ok(validTarget('rtmps://a.example:443/rtmp/KEY'));
+  assert.ok(!validTarget('https://instagram.com'));
+  const a = buildLiveArgs({ width: 720, height: 1280, fps: 30, bitrateKbps: 4000 }, 'rtmp://x/y/z').join(' ');
+  assert.match(a, /-c:v libx264 .*-b:v 4000k .*-g 60 -keyint_min 60/);
+  assert.match(a, /scale=720:1280/);
+  assert.match(a, /-c:a aac .*-f flv .*rtmp:\/\/x\/y\/z$/);
+});

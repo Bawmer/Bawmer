@@ -14,16 +14,17 @@ const { computeSync } = require('./sync');
 const { buildMp4Args, buildWavArgs, runFfmpeg, remux } = require('./exporter');
 const { lanAddresses, loadCertificate } = require('./net');
 const { detectDaws } = require('./daw');
+const { LiveSession } = require('./live');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
-const KIND = { DAW: 1, MIC: 2, SCREEN: 3, CAMERA: 4, USBCAM: 5 };
+const KIND = { DAW: 1, MIC: 2, SCREEN: 3, CAMERA: 4, USBCAM: 5, LIVE: 6 };
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json',
   '.wav': 'audio/wav', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
 };
 const MODE_DEFAULTS = {
-  studio: { aspect: '16:9', layout: 'split' },
+  studio: { aspect: '16:9', layout: 'pip' },
   performance: { aspect: '16:9', layout: 'camera' },
   tutorial: { aspect: '16:9', layout: 'split' },
   social: { aspect: '9:16', layout: 'camera' },
@@ -89,6 +90,7 @@ async function start(opts = {}) {
   let desktop = null; // WebSocket of the desktop UI
   let phone = null; // WebSocket of the paired phone
   let rec = null; // active recording
+  let live = null; // active live stream
   const ports = { local: 0, lan: 0 };
 
   const toDesktop = (msg) => { if (desktop && desktop.readyState === 1) desktop.send(JSON.stringify(msg)); };
@@ -178,8 +180,10 @@ async function start(opts = {}) {
   }
 
   function onBinary(role, buf) {
-    if (!rec || buf.length < 8) return;
+    if (buf.length < 8) return;
     const kind = buf.readUInt32LE(0);
+    if (kind === KIND.LIVE) { if (role === 'desktop' && live) live.write(buf.subarray(4)); return; }
+    if (!rec) return;
     if (role === 'desktop') {
       if (kind === KIND.DAW || kind === KIND.MIC) {
         const w = kind === KIND.DAW ? rec.daw : rec.mic;
@@ -214,6 +218,14 @@ async function start(opts = {}) {
     try {
       if (msg.type === 'rec.start') toDesktop({ type: 'rec.started', id: startRecording(msg) });
       else if (msg.type === 'rec.stop') toDesktop({ type: 'rec.saved', id: await stopRecording(msg) });
+      else if (msg.type === 'live.start') {
+        if (live) live.stop();
+        const session = new LiveSession(msg, (ev) => { if (live === session) { if (ev.type === 'live.ended') live = null; toDesktop(ev); } });
+        live = session;
+        try { session.start(); toDesktop({ type: 'live.started' }); } catch (e) { live = null; toDesktop({ type: 'live.ended', ok: false, message: e.message }); }
+      } else if (msg.type === 'live.stop') {
+        if (live) live.stop();
+      }
       else if (msg.type === 'usbcam.begin') {
         if (rec && !rec.cam && !rec.stopping) rec.cam = Object.assign(openVideo('camera', String(msg.mime || 'video/webm')), { done: true, local: true });
       }
@@ -275,7 +287,7 @@ async function start(opts = {}) {
         return sendJson(res, 200, {
           pairUrls: pairUrls(), phoneConnected: !!phone, storage: await store.storage(), dataDir,
           platform: process.platform, electron: !!opts.electron, recording: rec ? rec.project.id : null,
-          calibration: s.calibration || null, prefs: s.prefs || {},
+          calibration: s.calibration || null, prefs: s.prefs || {}, live: s.live || {},
         });
       }
       if (p === '/api/daws') return sendJson(res, 200, await detectDaws());
@@ -289,6 +301,7 @@ async function start(opts = {}) {
         const patch = {};
         if ('calibration' in body) patch.calibration = body.calibration;
         if ('prefs' in body) patch.prefs = body.prefs;
+        if ('live' in body && body.live && typeof body.live === 'object') patch.live = body.live;
         store.saveSettings(patch);
         return sendJson(res, 200, { ok: true });
       }
@@ -372,7 +385,7 @@ async function start(opts = {}) {
       if (isDesktop) onDesktopMessage(msg); else onPhoneMessage(msg);
     });
     ws.on('close', () => {
-      if (isDesktop && desktop === ws) { desktop = null; toPhone({ type: 'peer', connected: false }); }
+      if (isDesktop && desktop === ws) { desktop = null; if (live) { live.stop(); live = null; } toPhone({ type: 'peer', connected: false }); }
       if (!isDesktop && phone === ws) { phone = null; toDesktop({ type: 'peer', connected: false }); }
     });
     ws.on('error', () => {});

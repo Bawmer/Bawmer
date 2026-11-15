@@ -155,12 +155,43 @@
           <select id="micSel"></select>
         </label>
         <label class="check" id="screenRow"><input type="checkbox" id="screenOn"> Capture the DAW screen</label>
+        <label class="check" id="autoHideRow" hidden><input type="checkbox" id="autoHide" checked> Minimise this window while recording or live</label>
         <div class="screen-src" id="screenSrcRow" hidden><span id="screenSrcName">You choose the DAW window when you connect</span><button class="btn ghost" id="screenSrcBtn">Change</button></div>
         <p class="hint" id="audioHint"></p>
       </div>
       <div class="card-actions">
         <button class="btn primary" id="audioBtn">Connect DAW audio</button>
         <button class="btn" id="dawBtn">Routing help</button>
+      </div>
+    </section>
+
+    <section class="card" id="liveCard">
+      <header><h3>Live stream</h3><span class="state" id="liveState">Off</span></header>
+      <div class="controls">
+        <div class="seg" id="livePlat"><button data-v="instagram" class="active">Instagram</button><button data-v="tiktok">TikTok</button><button data-v="custom">Other</button></div>
+        <label>Server URL
+          <input class="txt" id="liveServer" placeholder="rtmps://…" spellcheck="false" autocomplete="off">
+        </label>
+        <label>Stream key
+          <input class="txt" id="liveKey" type="password" placeholder="Paste the stream key" spellcheck="false" autocomplete="off">
+        </label>
+        <div class="row2">
+          <label>Format
+            <select id="liveFormat"><option value="9:16">Vertical 9:16</option><option value="16:9">Landscape 16:9</option></select>
+          </label>
+          <label>Quality
+            <select id="liveQual"><option value="720">720p · 4 Mbps</option><option value="1080">1080p · 6 Mbps</option></select>
+          </label>
+        </div>
+        <label id="liveVertRow">Vertical picture
+          <select id="liveVert"><option value="stack">DAW on top, you below (best for phones)</option><option value="studio">Same as the studio picture</option></select>
+        </label>
+        <p class="hint" id="liveHelp"></p>
+        <canvas class="live-preview" id="livePreview" hidden></canvas>
+        <p class="hint" id="liveInfo"></p>
+      </div>
+      <div class="card-actions">
+        <button class="btn live-btn" id="liveBtn" disabled>● Go live</button>
       </div>
     </section>
   </aside>

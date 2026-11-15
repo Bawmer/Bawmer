@@ -8,6 +8,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { chromium } = require('playwright');
 const { start } = require('../server/app');
+const { spawn } = require('child_process');
 const { ffmpegPath } = require('../server/exporter');
 
 const shots = process.env.DLC_SHOTS;
@@ -67,15 +68,17 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
         return { comp: document.getElementById('stage').classList.contains('composite'), w: v.width, h: v.height };
       });
       assert(st.comp, 'studio preview shows the DAW screen and the camera together');
+      const over = await desk.evaluate(() => {
+        const a = document.getElementById('screenMain').getBoundingClientRect(), b = document.getElementById('preview').getBoundingClientRect();
+        return { pip: !document.getElementById('stage').classList.contains('split'), inside: b.left >= a.left && b.right <= a.right + 1 && b.top >= a.top && b.bottom <= a.bottom + 1, square: Math.abs(b.width - b.height) < 1.5, big: a.width > b.width * 3 };
+      });
+      assert(over.pip && over.inside && over.square && over.big, 'default is the full DAW screen with the camera over it (square box)');
+      await desk.click('#layoutStudio [data-v="split"]');
       const two = await desk.evaluate(() => {
         const a = document.getElementById('screenMain').getBoundingClientRect(), b = document.getElementById('preview').getBoundingClientRect();
-        return { split: document.getElementById('stage').classList.contains('split'), overlap: a.right > b.left + 1 && b.right > a.left + 1, ratio: a.width / b.width };
+        return { overlap: a.right > b.left + 1 && b.right > a.left + 1, ratio: a.width / b.width };
       });
-      assert(two.split && !two.overlap && Math.abs(two.ratio - 2) < 0.05, 'default is two screens side by side: DAW (2/3) + camera (1/3), no overlap');
-      await desk.click('#layoutStudio [data-v="pip"]');
-      const sq = await desk.evaluate(() => { const r = document.getElementById('preview').getBoundingClientRect(); return r.width > 20 && Math.abs(r.width - r.height) < 1.5; });
-      assert(sq, 'square box layout is still available');
-      await desk.click('#layoutStudio [data-v="split"]');
+      assert(!two.overlap && Math.abs(two.ratio - 2) < 0.05, 'side by side still available: DAW (2/3) + camera (1/3), no overlap');
       // resize by dragging the divider between DAW and camera
       const d = await desk.locator('#divStudio').boundingBox();
       await desk.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
@@ -86,6 +89,7 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
       assert(ratio2 > 0.6, `dragging the divider makes the camera panel bigger (camera/DAW ${ratio2.toFixed(2)})`);
       await desk.fill('#camSizeStudio', '44');
       await desk.dispatchEvent('#camSizeStudio', 'input');
+      await desk.click('#layoutStudio [data-v="pip"]');
     }
     await desk.click('#recBtn');
     await desk.waitForSelector('#recBadge:not([hidden])');
@@ -123,9 +127,9 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     await desk.click('#edPlay');
     const ed = await desk.evaluate(() => {
       const a = document.getElementById('edScreen').getBoundingClientRect(), b = document.querySelector('.ed-cam-wrap').getBoundingClientRect();
-      return { layout: document.getElementById('player').dataset.layout, overlap: a.right > b.left + 1 && b.right > a.left + 1, swap: !document.getElementById('swapSides').hidden };
+      return { layout: document.getElementById('player').dataset.layout, inside: b.left >= a.left - 1 && b.right <= a.right + 1, corner: !document.getElementById('cornerRow').hidden };
     });
-    assert(ed.layout === 'split' && !ed.overlap && ed.swap, 'editor opens with the same two-screen layout');
+    assert(ed.layout === 'pip' && ed.inside && ed.corner, 'editor opens with the same picture: camera over the full DAW');
     await desk.click('#aspectSeg [data-v="16:9"]');
     await desk.selectOption('#qualSel', '720');
     if (shots) { await sleep(400); await desk.screenshot({ path: path.join(shots, 'editor.png') }); }
@@ -160,6 +164,28 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     const d2 = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe(`../${id2}/${p2.camera.file}`));
     const s2 = d2 ? +d2[2] * 60 + +d2[3] : 0;
     assert(Math.abs(s2 - p2.duration) < 1.5 && Math.abs(p2.sync.cameraOffsetSec) < 1, `USB camera video matches the audio (${s2.toFixed(1)} s vs ${p2.duration.toFixed(1)} s, offset ${p2.sync.cameraOffsetSec.toFixed(3)} s)`);
+    // ── Live stream to a local RTMP receiver (stands in for Instagram / TikTok) ──
+    const flv = path.join(dataDir, 'live-received.flv');
+    const rtmpPort = 19350 + Math.floor(Math.random() * 400);
+    const receiver = spawn(ffmpegPath(), ['-hide_banner', '-loglevel', 'error', '-listen', '1', '-i', `rtmp://127.0.0.1:${rtmpPort}/live/secretkey`, '-c', 'copy', '-y', flv]);
+    await sleep(800);
+    await desk.click('.tab[data-view="studio"]');
+    await desk.click('#livePlat [data-v="custom"]');
+    await desk.fill('#liveServer', `rtmp://127.0.0.1:${rtmpPort}/live`);
+    await desk.fill('#liveKey', 'secretkey');
+    await desk.selectOption('#liveFormat', '9:16');
+    await desk.dispatchEvent('#liveServer', 'input');
+    await desk.click('#liveBtn');
+    await desk.waitForFunction(() => document.getElementById('liveState').textContent.startsWith('LIVE'), null, { timeout: 20000 });
+    await sleep(7000);
+    if (shots) await desk.screenshot({ path: path.join(shots, 'live.png') });
+    await desk.click('#liveBtn');
+    await new Promise((r) => { receiver.on('close', r); setTimeout(() => { receiver.kill('SIGINT'); }, 8000); });
+    const got = probe(`../../live-received.flv`);
+    const dur = /Duration: \d+:(\d+):([\d.]+)/.exec(got);
+    assert(/Video: h264.*720x1280/.test(got) && /Audio: aac.*48000 Hz, stereo/.test(got) && dur && +dur[1] * 60 + +dur[2] > 4,
+      `live stream arrives as 720×1280 H.264 + AAC stereo (${dur ? dur[2] : '?'} s received)`);
+    if (shots) execFileSync(ffmpegPath(), ['-y', '-loglevel', 'error', '-ss', '3', '-i', flv, '-frames:v', '1', path.join(shots, 'live-frame.png')]);
   } catch (e) {
     failed = true;
     console.error(e.message);

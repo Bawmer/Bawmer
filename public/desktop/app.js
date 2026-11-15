@@ -1,9 +1,11 @@
 import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
 import { AudioEngine, clockNow } from './audio-engine.js';
 import { initEditor, openSession, refreshSessions, onExportMessage } from './editor.js';
+import { Compositor } from './compositor.js';
 
 const KIND_SCREEN = 3;
 const KIND_USBCAM = 5;
+const KIND_LIVE = 6;
 const VIRTUAL = /blackhole|loopback|vb-audio|cable|soundflower|voicemeeter|stereo mix|what u hear|virtual|ground control|existential/i;
 const MODES = {
   studio: { screen: true, guide: null },
@@ -15,7 +17,7 @@ const MODES = {
 const engine = new AudioEngine();
 const S = {
   app: null, ws: null, phone: false, cam: null, pc: null, pendingIce: [],
-  mode: 'studio', rotation: 0, layout: 'split', splitSide: 'right', splitRatio: 1 / 3,
+  mode: 'studio', rotation: 0, layout: 'pip', live: null, liveCfg: {}, splitSide: 'right', splitRatio: 1 / 3,
   camSource: 'phone', usb: { stream: null, track: null, deviceId: null, height: 1080 }, usbRec: null, pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
   rec: null, // { id, pauses, pausedAt, cameraStartMs, cameraMarkers, screenStartMs, stopping }
   waiters: new Map(), calEdges: null, savedOnce: false,
@@ -64,6 +66,9 @@ function onMessage(msg) {
       for (const fn of [...S.waiters.values()]) fn({ error: msg.message });
       break;
     case 'export.progress': case 'export.done': case 'export.error': onExportMessage(msg); break;
+    case 'live.started': onLiveStarted(); break;
+    case 'live.stats': if (S.live) { S.live.seconds = msg.seconds; S.live.kbps = msg.kbps; renderLive(); } break;
+    case 'live.ended': onLiveEnded(msg); break;
   }
 }
 
@@ -301,6 +306,8 @@ function renderCam() {
   }
   layoutPreview();
   renderSteps();
+  if (S.live) { const { screen, camera } = liveSources(); compositor.setSources(screen, camera); }
+  if ($('liveBtn')) renderLive();
 }
 
 /** True when the DAW screen is live: it becomes the main picture with the camera boxed. */
@@ -504,6 +511,7 @@ async function connectAudio() {
 }
 
 function renderAudio() {
+  if (S.live) { const { screen, camera } = liveSources(); compositor.setSources(screen, camera); }
   const on = engine.running;
   const screen = !!(S.display && S.display.getVideoTracks().some((t) => t.readyState === 'live'));
   $('chipAudio').className = `chip ${on ? 'on' : ''}`;
@@ -633,6 +641,7 @@ async function startRecording() {
     S.rec = { id: res.id, pauses: [], pausedAt: null, cameraStartMs: null, cameraMarkers: [], screenStartMs: null };
     engine.startRecording(sendBin);
     startScreenRecorder();
+    syncBusy();
     if (S.camSource === 'usb' && S.usb.stream) startUsbRecorder();
     else if (S.camSource === 'phone' && S.phone) send({ type: 'cam.rec.start', sessionId: res.id });
     else toast('No camera connected — recording audio' + (S.screenRec ? ' and screen' : '') + ' only.');
@@ -670,6 +679,7 @@ async function stopRecording() {
     toast('Session saved', 'ok');
     S.rec = null;
     renderRec();
+    syncBusy();
     showView('library');
     await refreshSessions();
     openSession(res.id);
@@ -677,6 +687,7 @@ async function stopRecording() {
     toast(`Could not save the session: ${e.message}`, 'error');
     S.rec = null;
     renderRec();
+    syncBusy();
   }
   refreshState();
 }
@@ -720,6 +731,174 @@ function renderRec() {
   renderCam();
 }
 
+// ───────────────────────────────────────────── live streaming (Instagram / TikTok / RTMP)
+const PLATFORMS = {
+  instagram: {
+    placeholder: 'rtmps://edgetee-upload-….fbcdn.net:443/rtmp/',
+    help: 'On instagram.com (computer): Create → Live video → choose title and audience → copy the <b>Stream URL</b> and <b>Stream key</b> here. Press Go live here first, then Go live on Instagram once its preview shows you. The key is new for every broadcast.',
+    format: '9:16',
+  },
+  tiktok: {
+    placeholder: 'rtmp://push-rtmp-….tiktokcdn.com/game/',
+    help: 'Needs a TikTok account with LIVE access and a stream key (TikTok LIVE Center → LIVE → Stream key, or LIVE Studio). Copy the <b>Server URL</b> and <b>Stream key</b> here, press Go live here, then Go live in TikTok. Not every account is offered a stream key.',
+    format: '9:16',
+  },
+  custom: {
+    placeholder: 'rtmp://a.rtmp.youtube.com/live2',
+    help: 'Any RTMP or RTMPS server (YouTube, Twitch, Facebook, Restream…): paste the server URL and stream key from the platform.',
+    format: '16:9',
+  },
+};
+const compositor = new Compositor($('livePreview'));
+
+function liveLayout() {
+  // On a vertical stream the DAW goes across the top and you fill the rest,
+  // unless the studio picture was chosen.
+  if (S.live && S.live.height > S.live.width && S.live.cfg.vert !== 'studio') {
+    return { layout: 'split', splitSide: 'right', splitRatio: S.splitRatio, pipSize: S.pipSize, pipCorner: S.pipCorner, rotation: S.rotation };
+  }
+  return { layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, rotation: S.rotation };
+}
+function liveSources() {
+  const screen = S.display ? S.display.getVideoTracks().find((t) => t.readyState === 'live') : null;
+  const camStream = S.camSource === 'usb' ? S.usb.stream : S.phoneStream;
+  const camera = camStream ? camStream.getVideoTracks().find((t) => t.readyState === 'live') : null;
+  return { screen, camera };
+}
+
+function readLiveForm() {
+  const plat = S.liveCfg.platform || 'instagram';
+  return { platform: plat, server: $('liveServer').value.trim(), key: $('liveKey').value.trim(), format: $('liveFormat').value, quality: Number($('liveQual').value), vert: $('liveVert').value };
+}
+
+function renderLive() {
+  const L = S.live;
+  const plat = S.liveCfg.platform || 'instagram';
+  setSeg($('livePlat'), plat);
+  $('liveServer').placeholder = PLATFORMS[plat].placeholder;
+  $('liveHelp').innerHTML = PLATFORMS[plat].help;
+  const { screen, camera } = liveSources();
+  const ready = engine.running && (screen || camera);
+  $('liveBtn').disabled = !L && (!ready || !$('liveServer').value.trim());
+  $('liveBtn').classList.toggle('on', !!L);
+  $('liveBtn').textContent = L ? '■ End live' : '● Go live';
+  for (const id of ['liveServer', 'liveKey', 'liveFormat', 'liveQual']) $(id).disabled = !!L;
+  $('liveVertRow').hidden = $('liveFormat').value !== '9:16';
+  for (const b of $('livePlat').querySelectorAll('button')) b.disabled = !!L;
+  $('livePreview').hidden = !L;
+  $('liveState').className = `state ${L && L.on ? 'live' : ''}`;
+  $('liveState').textContent = !L ? 'Off' : L.on ? `LIVE ${fmtClock(L.seconds || 0)}` : L.retry ? 'Reconnecting…' : 'Connecting…';
+  $('liveInfo').textContent = !L ? (ready ? '' : 'Connect DAW audio and a camera or the DAW screen first.')
+    : L.on ? `Sending ${L.kbps || 0} kbps · ${L.width}×${L.height}` : L.retry ? `Connection lost — retry ${L.retry} of 5…` : 'Connecting to the platform…';
+  syncBusy();
+}
+
+function startLiveEncoder() {
+  const L = S.live;
+  const { screen, camera } = liveSources();
+  compositor.setSources(screen, camera);
+  const video = compositor.start({ width: L.width, height: L.height, fps: 30, getLayout: liveLayout });
+  const audio = engine.liveAudio();
+  const tracks = [video, ...(audio ? audio.getAudioTracks() : [])];
+  const mime = ['video/webm;codecs=h264,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m));
+  const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime, videoBitsPerSecond: 12_000_000, audioBitsPerSecond: 192_000 });
+  let chain = Promise.resolve();
+  mr.ondataavailable = (e) => {
+    if (!e.data.size) return;
+    chain = chain.then(async () => {
+      const out = new Uint8Array(4 + e.data.size);
+      new DataView(out.buffer).setUint32(0, KIND_LIVE, true);
+      out.set(new Uint8Array(await e.data.arrayBuffer()), 4);
+      sendBin(out);
+    });
+  };
+  L.mr = mr;
+  send({ type: 'live.start', server: L.cfg.server, key: L.cfg.key, width: L.width, height: L.height, fps: 30, bitrateKbps: L.kbpsTarget });
+}
+
+function onLiveStarted() {
+  const L = S.live;
+  if (!L || !L.mr || L.mr.state !== 'inactive') return;
+  L.mr.start(250);
+  L.on = true;
+  renderLive();
+}
+
+function stopLiveEncoder() {
+  const L = S.live;
+  if (L && L.mr && L.mr.state !== 'inactive') L.mr.stop();
+  compositor.stop();
+}
+
+async function goLive() {
+  if (S.live) return;
+  const cfg = readLiveForm();
+  if (!/^rtmps?:\/\//i.test(cfg.server)) { toast('The server URL must start with rtmp:// or rtmps://', 'error'); return; }
+  if (!cfg.key && !/\/[^/]+\/[^/]+$/.test(new URL(cfg.server).pathname)) toast('No stream key entered — using the server URL as it is.');
+  saveLiveCfg();
+  const q = cfg.quality === 1080 ? { s: 1080, kbps: 6000 } : { s: 720, kbps: 4000 };
+  const vertical = cfg.format === '9:16';
+  S.live = { cfg, width: vertical ? q.s : Math.round((q.s * 16) / 9 / 2) * 2, height: vertical ? Math.round((q.s * 16) / 9 / 2) * 2 : q.s, kbpsTarget: q.kbps, on: false, retry: 0, wanted: true };
+  startLiveEncoder();
+  renderLive();
+}
+
+function stopLive() {
+  const L = S.live;
+  if (!L) return;
+  L.wanted = false;
+  send({ type: 'live.stop' });
+  stopLiveEncoder();
+  S.live = null;
+  renderLive();
+}
+
+function onLiveEnded(msg) {
+  const L = S.live;
+  if (!L) return;
+  stopLiveEncoder();
+  if (L.wanted && !msg.ok && L.retry < 5) {
+    // Automatic reconnect: the platform or Wi-Fi dropped us.
+    L.retry += 1;
+    L.on = false;
+    toast(`Live: ${msg.message} Reconnecting…`, 'error');
+    renderLive();
+    setTimeout(() => { if (S.live === L && L.wanted) startLiveEncoder(); }, 2000 * L.retry);
+    return;
+  }
+  S.live = null;
+  toast(msg.ok ? 'Live stream ended.' : `Live stream stopped: ${msg.message}`, msg.ok ? 'ok' : 'error');
+  renderLive();
+}
+
+function saveLiveCfg() {
+  const plat = S.liveCfg.platform || 'instagram';
+  S.liveCfg[plat] = { server: $('liveServer').value.trim(), key: $('liveKey').value.trim(), format: $('liveFormat').value, quality: $('liveQual').value, vert: $('liveVert').value };
+  api('/api/settings', 'PUT', { live: S.liveCfg }).catch(() => {});
+}
+function loadLivePlatform(plat) {
+  S.liveCfg.platform = plat;
+  const c = S.liveCfg[plat] || {};
+  $('liveServer').value = c.server || '';
+  $('liveKey').value = c.key || '';
+  $('liveFormat').value = c.format || PLATFORMS[plat].format;
+  $('liveQual').value = c.quality || '720';
+  $('liveVert').value = c.vert || 'stack';
+  renderLive();
+}
+
+// ───────────────────────────────────────────── dashboard hiding & floating controls (desktop app)
+function syncBusy() {
+  if (!window.dlcNative) return;
+  window.dlcNative.setBusy({ recording: !!S.rec, live: !!S.live, autoHide: $('autoHide').checked });
+}
+function onShellCommand(cmd) {
+  if (cmd === 'toggle') { if (S.rec) stopRecording(); else startRecording(); }
+  else if (cmd === 'stop') stopRecording();
+  else if (cmd === 'pause') togglePause();
+  else if (cmd === 'live-stop') stopLive();
+}
+
 // ───────────────────────────────────────────── workflow steps & storage
 function renderSteps() {
   const done = {
@@ -752,7 +931,7 @@ function savePrefs() {
   api('/api/settings', 'PUT', { prefs: {
     source: $('srcSel').value, sampleRate: $('rateSel').value, bitDepth: $('bitSel').value,
     mode: S.mode, rotation: S.rotation, mic: $('micOn').checked,
-    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, layout: S.layout, splitSide: S.splitSide, splitRatio: S.splitRatio, camSource: S.camSource, usbDevice: S.usb.deviceId,
+    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, picture: S.layout, autoHide: $('autoHide').checked, splitSide: S.splitSide, splitRatio: S.splitRatio, camSource: S.camSource, usbDevice: S.usb.deviceId,
   } }).catch(() => {});
 }
 
@@ -912,7 +1091,8 @@ async function init() {
   if (p.bitDepth) $('bitSel').value = p.bitDepth;
   S.rotation = Number(p.rotation) || 0;
   if (p.pipSize) S.pipSize = p.pipSize;
-  if (p.layout === 'pip' || p.layout === 'split') S.layout = p.layout;
+  if (p.picture === 'pip' || p.picture === 'split') S.layout = p.picture;
+  if (p.autoHide === false) $('autoHide').checked = false;
   if (p.splitSide) S.splitSide = p.splitSide;
   if (Number(p.splitRatio)) S.splitRatio = Number(p.splitRatio);
   if (p.pipSize != null) S.pipSize = p.pipSize;
@@ -968,6 +1148,24 @@ async function init() {
     layoutPreview(); savePrefsSoon();
   }, { passive: false });
   segmented($('camSrcSeg'), (v) => setCamSource(v));
+  $('autoHideRow').hidden = !window.dlcNative;
+  $('autoHide').onchange = () => { savePrefs(); syncBusy(); };
+  if (window.dlcNative) {
+    window.dlcNative.onCommand(onShellCommand);
+    setInterval(() => {
+      if (!S.rec && !S.live) return;
+      window.dlcNative.status({
+        time: fmtClock(S.rec ? elapsed() : (S.live && S.live.seconds) || 0),
+        recording: !!S.rec, paused: !!(S.rec && S.rec.pausedAt != null), live: !!(S.live && S.live.on),
+      });
+    }, 500);
+  }
+  S.liveCfg = S.app.live || {};
+  segmented($('livePlat'), (v) => { saveLiveCfg(); loadLivePlatform(v); });
+  for (const id of ['liveServer', 'liveKey', 'liveFormat', 'liveQual', 'liveVert']) $(id).addEventListener('change', () => { saveLiveCfg(); renderLive(); });
+  $('liveServer').addEventListener('input', () => renderLive());
+  $('liveBtn').onclick = () => (S.live ? stopLive() : goLive());
+  loadLivePlatform(S.liveCfg.platform || 'instagram');
   $('usbSel').onchange = () => { if (S.camSource === 'usb') startUsb(); };
   $('usbQuick').onclick = () => setCamSource('usb');
   navigator.mediaDevices.addEventListener('devicechange', () => listUsb().catch(() => {}));
