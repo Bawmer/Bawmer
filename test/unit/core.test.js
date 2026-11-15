@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { WavWriter, HEADER_BYTES } = require('../../server/wav');
 const { computeSync, keepSegments } = require('../../server/sync');
-const { buildMp4Args, canvasSize, pipBox, splitBoxes } = require('../../server/exporter');
+const { buildMp4Args, canvasSize, pipBox, splitBoxes, frameBoxes } = require('../../server/exporter');
 
 test('wav writer produces a valid 24-bit header and samples', () => {
   const file = path.join(os.tmpdir(), `dlc-${process.pid}.wav`);
@@ -60,8 +60,8 @@ test('mp4 export graph', () => {
   assert.match(graph, /setpts=\(PTS-STARTPTS\)\*1\.000020\+0\.200000\/TB/);
   // Full DAW screen is fitted (never cropped); camera is a small square, bottom-right by default.
   assert.match(graph, /\[scr\]scale=1920:1080:force_original_aspect_ratio=decrease[^;]*pad=1920:1080/);
-  assert.match(graph, /\[cam\]scale=294:294:force_original_aspect_ratio=increase,crop=294:294,setsar=1,pad=302:302:4:4/);
-  assert.match(graph, /overlay=1586:746\[v\]/);
+  assert.match(graph, /\[cam0\]scale=294:294:force_original_aspect_ratio=increase,crop=294:294,setsar=1,pad=302:302:4:4/);
+  assert.match(graph, /\[c0\]overlay=1586:746\[base2\]/);
   assert.match(graph, /concat=n=2:v=0:a=1/);
 });
 
@@ -84,8 +84,8 @@ test('side by side: complete DAW panel + camera panel, no overlap', () => {
   const { args } = buildMp4Args(project, '/s', { trimStart: 0, trimEnd: 5, aspect: '16:9', quality: 1080, fps: 30, layout: 'split', splitSide: 'left' }, '/o.mp4');
   const graph = args[args.indexOf('-filter_complex') + 1];
   assert.match(graph, /\[scr\]scale=1280:1080:force_original_aspect_ratio=decrease/); // DAW never cropped
-  assert.match(graph, /\[cam\]scale=640:1080:force_original_aspect_ratio=increase,crop=640:1080/);
-  assert.match(graph, /\[b\]\[a\]hstack=inputs=2\[v\]/);
+  assert.match(graph, /\[cam0\]scale=640:1080:force_original_aspect_ratio=increase,crop=640:1080/);
+  assert.match(graph, /\[s\]overlay=640:0\[base1\];.*\[c0\]overlay=0:0\[base2\]/);
 });
 
 test('resizing: camera share and box size are adjustable and clamped', () => {
@@ -106,4 +106,30 @@ test('live: target URL, validation and ffmpeg arguments', () => {
   assert.match(a, /-c:v libx264 .*-b:v 4000k .*-g 60 -keyint_min 60/);
   assert.match(a, /scale=720:1280/);
   assert.match(a, /-c:a aac .*-f flv .*rtmp:\/\/x\/y\/z$/);
+});
+
+test('phone + USB: two cameras with the DAW', () => {
+  const o = { screen: true, layout: 'pip', pipSize: 'small', pipCorner: 'br' };
+  const pip = frameBoxes(1920, 1080, o, 2);
+  assert.deepEqual(pip.cams.map((c) => [c.x, c.y, c.w]), [[1586, 746, 302], [32, 746, 302]]); // bottom-right + bottom-left
+  const side = frameBoxes(1920, 1080, { ...o, layout: 'split', splitSide: 'right' }, 2);
+  assert.deepEqual(side.cams, [{ x: 1280, y: 0, w: 640, h: 540 }, { x: 1280, y: 540, w: 640, h: 540 }]);
+  const tall = frameBoxes(720, 1280, { ...o, layout: 'split' }, 2);
+  assert.deepEqual(tall.cams, [{ x: 0, y: 406, w: 360, h: 874 }, { x: 360, y: 406, w: 360, h: 874 }]); // side by side under the DAW
+  const noScreen = frameBoxes(1920, 1080, { screen: false }, 2);
+  assert.deepEqual(noScreen.cams.map((c) => c.w), [960, 960]);
+
+  const project = { audio: { file: 'a.wav' }, camera: { file: 'c.mp4' }, camera2: { file: 'c2.webm' }, screen: { file: 's.webm' }, timing: {},
+    sync: { cameraOffsetSec: 0.2, camera2OffsetSec: 0.05 } };
+  const { args } = buildMp4Args(project, '/s', { trimStart: 0, trimEnd: 5, aspect: '16:9', quality: 1080, fps: 30, layout: 'pip' }, '/o.mp4');
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.equal(args.filter((a) => a === '-i').length, 4); // audio, screen, phone, USB
+  assert.match(graph, /\[3:v\]setpts=\(PTS-STARTPTS\)\*1\.000000\+0\.050000\/TB/); // USB camera on its own offset
+  assert.match(graph, /\[c1\]overlay=32:746\[base3\];\[base3\]null\[v\]/);
+});
+
+test('sync: USB camera next to the phone uses the computer clock', () => {
+  const s = computeSync({ audioStartMs: 1000, cameraStartMs: 1300, camera2StartMs: 1100, calibration: { videoLatencyMs: 120, camera2LatencyMs: 60 } }, 48000);
+  assert.ok(Math.abs(s.cameraOffsetSec - 0.18) < 1e-9);
+  assert.ok(Math.abs(s.camera2OffsetSec - 0.04) < 1e-9);
 });

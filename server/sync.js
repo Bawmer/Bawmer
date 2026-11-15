@@ -54,6 +54,10 @@ function computeSync(timing, sampleRate) {
     out.cameraOffsetSec = ((cam.start - audio.start) / audio.rate - videoLatency + audioLatency) / 1000;
     out.driftCorrected = cam.drift || audio.drift;
   }
+  if (Number.isFinite(t.camera2StartMs)) {
+    // USB camera recorded on this computer: same clock as the audio.
+    out.camera2OffsetSec = ((t.camera2StartMs - audio.start) / audio.rate - (Number(cal.camera2LatencyMs) || 0) + audioLatency) / 1000;
+  }
   if (Number.isFinite(t.screenStartMs)) {
     out.screenOffsetSec = ((t.screenStartMs - audio.start) / audio.rate + audioLatency) / 1000;
   }

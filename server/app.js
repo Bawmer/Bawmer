@@ -113,7 +113,7 @@ async function start(opts = {}) {
     });
     const dir = store.dir(project.id);
     rec = {
-      project, dir, cam: null, screen: null, camDone: null,
+      project, dir, cam: null, cam2: null, screen: null, camDone: null,
       daw: new WavWriter(path.join(dir, 'audio.wav'), { sampleRate, bitDepth, channels: 2 }),
       mic: msg.mic ? new WavWriter(path.join(dir, 'mic.wav'), { sampleRate, bitDepth, channels: 2 }) : null,
     };
@@ -155,6 +155,7 @@ async function start(opts = {}) {
       }
       const p = r.project;
       const camFile = await finishVideo(r.cam, 'camera');
+      const cam2File = await finishVideo(r.cam2, 'camera2');
       const scrFile = await finishVideo(r.screen, 'screen');
       p.audio.frames = r.daw.frames;
       p.duration = r.daw.frames / p.audio.sampleRate;
@@ -162,6 +163,7 @@ async function start(opts = {}) {
       const cm = msg.camera || {};
       if (camFile) p.camera = { file: camFile, mime: r.cam.mime, width: cm.width || null, height: cm.height || null, fps: cm.fps || null };
       if (scrFile) p.screen = { file: scrFile };
+      if (cam2File) { const c2 = msg.camera2 || {}; p.camera2 = { file: cam2File, mime: r.cam2.mime, width: c2.width || null, height: c2.height || null }; }
       p.timing = msg.timing || {};
       p.sync = computeSync(p.timing, p.audio.sampleRate);
       p.edit = {
@@ -194,9 +196,10 @@ async function start(opts = {}) {
         w.write(new Float32Array(copy.buffer));
       } else if (kind === KIND.USBCAM) {
         // USB camera recorded on this computer: same clock as the audio, no upload to wait for.
-        if (!rec.cam || !rec.cam.local || rec.cam.fd == null) return;
-        fs.writeSync(rec.cam.fd, buf, 4, buf.length - 4);
-        rec.cam.bytes += buf.length - 4;
+        const v = rec.cam2 && rec.cam2.local ? rec.cam2 : rec.cam && rec.cam.local ? rec.cam : null;
+        if (!v || v.fd == null) return;
+        fs.writeSync(v.fd, buf, 4, buf.length - 4);
+        v.bytes += buf.length - 4;
       } else if (kind === KIND.SCREEN) {
         if (!rec.screen) rec.screen = openVideo('screen', 'video/webm');
         if (rec.screen.fd == null) return;
@@ -227,7 +230,13 @@ async function start(opts = {}) {
         if (live) live.stop();
       }
       else if (msg.type === 'usbcam.begin') {
-        if (rec && !rec.cam && !rec.stopping) rec.cam = Object.assign(openVideo('camera', String(msg.mime || 'video/webm')), { done: true, local: true });
+        // slot "second": the USB camera next to the phone (Phone + USB); otherwise it is the only camera.
+        const second = msg.slot === 'second';
+        const name = second ? 'camera2' : 'camera';
+        if (rec && !rec.stopping && !(second ? rec.cam2 : rec.cam)) {
+          const v = Object.assign(openVideo(name, String(msg.mime || 'video/webm')), { done: true, local: true });
+          if (second) rec.cam2 = v; else rec.cam = v;
+        }
       }
       else toPhone(msg);
     } catch (e) {

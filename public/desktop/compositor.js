@@ -1,7 +1,7 @@
 // Builds the live picture (DAW screen + camera, same layout as the export)
 // into one video track. Frames are pulled straight from the tracks and
 // pushed by a timer, so it keeps running while the dashboard is minimised.
-import { pipBox, splitBoxes } from './util.js';
+import { frameBoxes } from './util.js';
 
 const hasProcessor = typeof MediaStreamTrackProcessor !== 'undefined';
 const hasGenerator = typeof MediaStreamTrackGenerator !== 'undefined';
@@ -70,11 +70,12 @@ export class Compositor {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.screen = null;
-    this.camera = null;
+    this.cameras = [];
     this.timer = null;
   }
 
-  setSources(screenTrack, cameraTrack) {
+  /** Screen track plus up to two camera tracks (phone, USB). */
+  setSources(screenTrack, cameraTracks) {
     const swap = (cur, track) => {
       if (cur && cur.origin === track) return cur;
       if (cur) cur.stop();
@@ -84,7 +85,10 @@ export class Compositor {
       return fs;
     };
     this.screen = swap(this.screen, screenTrack);
-    this.camera = swap(this.camera, cameraTrack);
+    const list = (cameraTracks || []).filter(Boolean);
+    const next = [];
+    for (let i = 0; i < 2; i++) next.push(swap(this.cameras[i] || null, list[i] || null));
+    this.cameras = next;
   }
 
   /** @param getLayout () => { layout, pipSize, pipCorner, splitSide, splitRatio, rotation } */
@@ -118,23 +122,17 @@ export class Compositor {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
     const scr = this.screen && this.screen.image;
-    const cam = this.camera && this.camera.image;
-    if (scr && cam && L.layout === 'split') {
-      const sb = splitBoxes(W, H, L.splitSide, L.splitRatio);
-      contain(ctx, scr, sb.scr);
-      cover(ctx, cam, sb.cam, L.rotation);
-    } else if (scr && cam) {
-      contain(ctx, scr, { x: 0, y: 0, w: W, h: H });
-      const b = pipBox(W, H, L.pipSize, L.pipCorner);
-      const o = Math.max(2, Math.round(b.size * 0.01));
-      ctx.fillStyle = '#2ff3e0';
-      ctx.fillRect(b.x, b.y, b.size, b.size);
-      cover(ctx, cam, { x: b.x + o, y: b.y + o, w: b.size - 2 * o, h: b.size - 2 * o }, L.rotation);
-    } else if (scr) {
-      contain(ctx, scr, { x: 0, y: 0, w: W, h: H });
-    } else if (cam) {
-      cover(ctx, cam, { x: 0, y: 0, w: W, h: H }, L.rotation);
-    }
+    const cams = this.cameras.map((c, i) => (c && c.image ? { img: c.image, rot: i === 0 ? L.rotation : 0 } : null)).filter(Boolean);
+    const F = frameBoxes(W, H, { ...L, screen: !!scr }, cams.length);
+    if (F.scr) contain(ctx, scr, F.scr);
+    F.cams.forEach((box, i) => {
+      if (box.outline) {
+        const o = Math.max(2, Math.round(box.w * 0.01));
+        ctx.fillStyle = '#2ff3e0';
+        ctx.fillRect(box.x, box.y, box.w, box.h);
+        cover(ctx, cams[i].img, { x: box.x + o, y: box.y + o, w: box.w - 2 * o, h: box.h - 2 * o }, cams[i].rot);
+      } else cover(ctx, cams[i].img, box, cams[i].rot);
+    });
   }
 
   stop() {
@@ -148,7 +146,8 @@ export class Compositor {
   dispose() {
     this.stop();
     if (this.screen) this.screen.stop();
-    if (this.camera) this.camera.stop();
-    this.screen = this.camera = null;
+    for (const c of this.cameras) if (c) c.stop();
+    this.screen = null;
+    this.cameras = [];
   }
 }

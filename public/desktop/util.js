@@ -157,3 +157,23 @@ export function dragDivider(handle, getFrame, isCamFirst, onRatio, onEnd) {
   handle.addEventListener('pointerup', end);
   handle.addEventListener('pointercancel', end);
 }
+
+/** DAW screen + 0–2 cameras in a frame (same as server/exporter.js frameBoxes). */
+export function frameBoxes(w, h, o, n) {
+  const full = { x: 0, y: 0, w, h };
+  const halves = (c, sideBySide) => {
+    if (sideBySide) { const a = even(c.w / 2); return [{ x: c.x, y: c.y, w: a, h: c.h }, { x: c.x + a, y: c.y, w: c.w - a, h: c.h }]; }
+    const a = even(c.h / 2);
+    return [{ x: c.x, y: c.y, w: c.w, h: a }, { x: c.x, y: c.y + a, w: c.w, h: c.h - a }];
+  };
+  if (!o.screen) return { scr: null, cams: n === 0 ? [] : n === 1 ? [full] : halves(full, w >= h) };
+  if (n === 0) return { scr: full, cams: [] };
+  if (o.layout === 'split') {
+    const sb = splitBoxes(w, h, o.splitSide, o.splitRatio);
+    return { scr: sb.scr, cams: n === 1 ? [sb.cam] : halves(sb.cam, !sb.wide), wide: sb.wide, camFirst: sb.camFirst };
+  }
+  const corner = ['tl', 'tr', 'bl', 'br'].includes(o.pipCorner) ? o.pipCorner : 'br';
+  const corners = [corner, corner[0] + (corner[1] === 'l' ? 'r' : 'l')];
+  const cams = corners.slice(0, n).map((c) => { const b = pipBox(w, h, o.pipSize, c); return { x: b.x, y: b.y, w: b.size, h: b.size, outline: true }; });
+  return { scr: full, cams };
+}

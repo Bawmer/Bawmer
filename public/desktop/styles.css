@@ -59,8 +59,8 @@ small { color: var(--dim); }
 .stage { position: relative; flex: 1; min-height: 0; background: #05060a; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: grid; place-items: center; }
 .stage video#preview { width: 100%; height: 100%; object-fit: contain; transition: transform .25s; }
 #screenMain { position: absolute; object-fit: contain; background: #000; }
-.stage.composite #preview { position: absolute; object-fit: cover; border-radius: 6px; box-shadow: 0 6px 24px #000c, 0 0 0 1.5px #2ff3e0aa; cursor: grab; z-index: 2; transition: none; touch-action: none; }
-.stage.composite.split #preview { border-radius: 0; box-shadow: none; cursor: default; }
+.stage.composite #preview, .stage.composite #preview2 { position: absolute; object-fit: cover; border-radius: 6px; box-shadow: 0 6px 24px #000c, 0 0 0 1.5px #2ff3e0aa; cursor: grab; z-index: 2; transition: none; touch-action: none; }
+.stage.composite.split #preview, .stage.composite.split #preview2 { border-radius: 0; box-shadow: none; cursor: default; }
 .stage.composite #preview.dragging { cursor: grabbing; opacity: .85; }
 .guide { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); height: 100%; border: 1px dashed #2ff3e0aa; box-shadow: 0 0 0 4000px #0008; pointer-events: none; border-radius: 4px; }
 .guide::after { content: attr(data-label); position: absolute; left: 8px; top: 8px; font-size: 10px; letter-spacing: .1em; color: var(--cyan); }
@@ -151,7 +151,8 @@ input[type=checkbox] { accent-color: var(--cyan); width: 14px; height: 14px; mar
 .divider:hover::after, .divider:active::after { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
 .divider::before { content: ""; position: absolute; left: 3px; top: 50%; width: 8px; height: 34px; margin-top: -17px; border-radius: 4px; background: var(--cyan); box-shadow: 0 0 10px #2ff3e088; }
 .empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-#camSrcSeg button { padding: 6px 8px; }
+#camSrcSeg button { padding: 6px 4px; font-size: 11px; }
+#preview2 { object-fit: cover; }
 .txt { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 7px; padding: 7px 8px; width: 100%; outline: none; color: var(--text); font-size: 12px; }
 .txt::placeholder { color: var(--faint); }
 .live-btn { font-weight: 600; }
@@ -201,6 +202,7 @@ input[type=checkbox] { accent-color: var(--cyan); width: 14px; height: 14px; mar
 .player video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .ed-cam-wrap { position: absolute; inset: 0; overflow: hidden; }
 .player[data-layout="camera"] #edScreen, .player[data-layout="screen"] .ed-cam-wrap { display: none; }
+#edCam2Wrap { z-index: 1; }
 .player[data-layout="pip"] .ed-cam-wrap { inset: auto; border-radius: 3px; box-shadow: 0 4px 18px #000a; cursor: grab; touch-action: none; }
 .player[data-layout="pip"] #edScreen, .player[data-layout="screen"] #edScreen { object-fit: contain; }
 .player[data-layout="split"] #edScreen { object-fit: contain; }

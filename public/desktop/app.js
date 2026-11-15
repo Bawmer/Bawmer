@@ -1,4 +1,4 @@
-import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
+import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, frameBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
 import { AudioEngine, clockNow } from './audio-engine.js';
 import { initEditor, openSession, refreshSessions, onExportMessage } from './editor.js';
 import { Compositor } from './compositor.js';
@@ -52,7 +52,7 @@ function onMessage(msg) {
       if (S.pc && S.pc.remoteDescription) S.pc.addIceCandidate(msg.candidate).catch(() => {});
       else S.pendingIce.push(msg.candidate);
       break;
-    case 'cam.state': if (S.camSource === 'phone') { S.cam = msg; renderCam(); } break;
+    case 'cam.state': if (S.camSource !== 'usb') { S.cam = msg; renderCam(); } break;
     case 'cam.rec.started':
       if (S.rec && msg.sessionId === S.rec.id) { S.rec.cameraStartMs = msg.startMs; S.rec.cameraMime = msg.mime; }
       break;
@@ -83,7 +83,7 @@ function setPhone(connected) {
   } else {
     if (S.pc) { S.pc.close(); S.pc = null; }
     S.phoneStream = null;
-    if (S.camSource === 'phone') { $('preview').srcObject = null; S.cam = null; }
+    if (S.camSource !== 'usb') { $('preview').srcObject = null; S.cam = null; }
   }
   renderCam();
 }
@@ -95,7 +95,7 @@ async function onOffer(msg) {
   pc.ontrack = (e) => {
     try { e.receiver.jitterBufferTarget = 0; } catch { /* optional */ }
     S.phoneStream = e.streams[0] || new MediaStream([e.track]);
-    if (S.camSource === 'phone') $('preview').srcObject = S.phoneStream;
+    if (S.camSource !== 'usb') $('preview').srcObject = S.phoneStream;
     renderCam();
   };
   pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'rtc.ice', candidate: e.candidate }); };
@@ -155,7 +155,7 @@ async function startUsb() {
       audio: false,
       video: { ...(id ? { deviceId: { exact: id } } : {}), width: { ideal: Math.round((h * 16) / 9) }, height: { ideal: h }, frameRate: { ideal: fps } },
     });
-    if (S.camSource !== 'usb') { stream.getTracks().forEach((t) => t.stop()); return; }
+    if (S.camSource === 'phone') { stream.getTracks().forEach((t) => t.stop()); return; }
     S.usb.stream = stream;
     S.usb.track = stream.getVideoTracks()[0];
     S.usb.track.contentHint = 'motion';
@@ -164,15 +164,17 @@ async function startUsb() {
     S.usb.track.addEventListener('ended', () => {
       if (S.usb.stream !== stream) return;
       toast('The USB camera was disconnected.', 'error');
-      stopUsb(); S.cam = null; $('preview').srcObject = null; renderCam();
+      stopUsb(); usbVideo().srcObject = null;
+      if (S.camSource === 'usb') S.cam = null;
+      renderCam();
     });
-    $('preview').srcObject = stream;
-    S.cam = usbState();
+    usbVideo().srcObject = stream;
+    if (S.camSource === 'usb') S.cam = usbState();
     await listUsb();
     $('usbSel').value = S.usb.deviceId;
     savePrefs();
   } catch (e) {
-    S.cam = null;
+    if (S.camSource === 'usb') S.cam = null;
     toast(e.name === 'NotAllowedError' ? 'Camera access was blocked. Allow the camera for DAW LIVE CAM in Windows privacy settings.' : `USB camera: ${e.message}`, 'error');
   }
   renderCam();
@@ -196,39 +198,45 @@ async function usbSet(patch) {
   } catch (e) {
     toast(`This camera does not support that setting (${e.message}).`, 'error');
   }
-  S.cam = usbState();
+  if (S.camSource === 'usb') S.cam = usbState();
   renderCam();
 }
+
+/** The <video> showing the USB camera: the main one, or the second one next to the phone. */
+const usbVideo = () => (S.camSource === 'both' ? $('preview2') : $('preview'));
 
 async function setCamSource(src) {
   if (S.rec || S.camSource === src) return;
   S.camSource = src;
   setSeg($('camSrcSeg'), src);
+  stopUsb();
+  $('preview2').srcObject = null;
   S.cam = null;
-  $('preview').srcObject = null;
   if (src === 'usb') {
+    $('preview').srcObject = null;
     renderCam();
     await startUsb();
   } else {
-    stopUsb();
+    // Phone (and in "both" mode the USB camera next to it).
     $('preview').srcObject = S.phoneStream || null;
     if (S.phone) send({ type: 'hello', calibrated: !!S.calibration }); // ask the phone for its state again
     renderCam();
+    if (src === 'both') await startUsb();
   }
   savePrefs();
 }
 
-function startUsbRecorder() {
-  if (S.camSource !== 'usb' || !S.usb.stream) return;
+function startUsbRecorder(slot = 'main') {
+  if (S.camSource === 'phone' || !S.usb.stream) return;
   const mime = ['video/webm;codecs=h264', 'video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
     .find((m) => MediaRecorder.isTypeSupported(m));
   const s = S.usb.track.getSettings();
   const short = Math.min(s.width || 1080, s.height || 1080);
   const bitrate = (short >= 2000 ? 40e6 : short >= 1000 ? 14e6 : 7e6) * ((s.frameRate || 30) > 40 ? 1.5 : 1);
-  send({ type: 'usbcam.begin', mime });
+  send({ type: 'usbcam.begin', mime, slot });
   const mr = new MediaRecorder(S.usb.stream, { mimeType: mime, videoBitsPerSecond: bitrate });
   let chain = Promise.resolve();
-  mr.onstart = () => { if (S.rec) S.rec.cameraStartMs = clockNow(); };
+  mr.onstart = () => { if (S.rec) S.rec[slot === 'second' ? 'camera2StartMs' : 'cameraStartMs'] = clockNow(); };
   mr.ondataavailable = (e) => {
     if (!e.data.size) return;
     chain = chain.then(async () => {
@@ -253,13 +261,14 @@ async function stopUsbRecorder() {
 
 function renderCam() {
   const c = S.cam;
-  const usb = S.camSource === 'usb';
-  const connected = usb ? !!S.usb.stream : S.phone;
-  const live = connected && !!$('preview').srcObject;
+  const usb = S.camSource === 'usb', both = S.camSource === 'both';
+  const usbLive = !!S.usb.stream;
+  const connected = usb ? usbLive : both ? S.phone || usbLive : S.phone;
+  const live = connected && (!!$('preview').srcObject || (both && usbLive));
   const recLost = S.rec && !usb && !S.phone;
   $('stageEmpty').hidden = connected;
-  $('emptyTitle').textContent = usb ? 'Plug in a USB camera' : 'Connect a camera';
-  $('usbRow').hidden = !usb;
+  $('emptyTitle').textContent = usb ? 'Plug in a USB camera' : both ? 'Connect your phone and a USB camera' : 'Connect a camera';
+  $('usbRow').hidden = S.camSource === 'phone';
   $('facingRow').hidden = usb;
   $('pairBtn2').hidden = usb;
   for (const b of $('camSrcSeg').querySelectorAll('button')) b.disabled = !!S.rec;
@@ -269,6 +278,7 @@ function renderCam() {
   const chip = $('chipCam');
   chip.className = `chip ${recLost ? 'warn' : connected ? 'on' : ''}`;
   chip.lastElementChild.textContent = recLost ? 'Reconnecting — phone keeps recording'
+    : both ? `Phone ${S.phone && $('preview').srcObject ? 'live' : 'offline'} · USB ${usbLive ? 'live' : 'offline'}`
     : live ? (usb ? 'USB camera live' : 'Camera live') : connected ? 'Camera starting…' : 'Camera offline';
   $('camState').textContent = connected ? (c ? 'Connected' : 'Waiting for camera…') : 'Not connected';
   $('camState').className = `state ${connected ? 'on' : ''}`;
@@ -306,7 +316,7 @@ function renderCam() {
   }
   layoutPreview();
   renderSteps();
-  if (S.live) { const { screen, camera } = liveSources(); compositor.setSources(screen, camera); }
+  if (S.live) { const { screen, cameras } = liveSources(); compositor.setSources(screen, cameras); }
   if ($('liveBtn')) renderLive();
 }
 
@@ -318,9 +328,14 @@ function layoutPreview() {
   const sw = stage.clientWidth, sh = stage.clientHeight;
   const rot = S.rotation % 180 !== 0;
   const comp = composite();
+  const v2 = $('preview2');
+  const two = S.camSource === 'both' && !!v2.srcObject && !!v.srcObject;
+  const oneCam = !two && S.camSource === 'both' && !!v2.srcObject && !v.srcObject; // only the USB camera so far
+  const multi = comp || two;
   const split = comp && S.layout === 'split';
-  stage.classList.toggle('composite', comp);
-  stage.classList.toggle('split', split);
+  v2.hidden = !(two || oneCam);
+  stage.classList.toggle('composite', multi || oneCam);
+  stage.classList.toggle('split', split || (!comp && (two || oneCam)));
   $('layoutRowStudio').hidden = !comp;
   $('camSizeRowStudio').hidden = !comp;
   $('cornerRowStudio').hidden = !comp || split;
@@ -333,23 +348,16 @@ function layoutPreview() {
   $('swapStudio').hidden = !split;
   setSeg($('layoutStudio'), S.layout);
   setSeg($('pipCornerStudio'), S.pipCorner);
-  if (comp) {
+  if (multi || oneCam) {
     // The 16:9 frame of the final video, exactly as it will be exported.
     const cw = Math.min(sw, (sh * 16) / 9), ch = (cw * 9) / 16;
     const cx = (sw - cw) / 2, cy = (sh - ch) / 2;
     S.frame = { cx, cy, cw, ch };
-    if (split) {
-      // Two screens: complete DAW in one panel, you in the other.
-      const sb = splitBoxes(cw, ch, S.splitSide, S.splitRatio);
-      Object.assign(scr.style, { left: `${cx + sb.scr.x}px`, top: `${cy + sb.scr.y}px`, width: `${sb.scr.w}px`, height: `${sb.scr.h}px` });
-      placeVideo(v, sb.cam, S.rotation, cx, cy);
-      const dx = cx + (sb.camFirst ? sb.cam.w : sb.scr.w);
-      Object.assign($('divStudio').style, { left: `${dx}px`, top: `${cy}px`, height: `${ch}px` });
-    } else {
-      Object.assign(scr.style, { left: `${cx}px`, top: `${cy}px`, width: `${cw}px`, height: `${ch}px` });
-      const b = pipBox(cw, ch, S.pipSize, S.pipCorner);
-      placeVideo(v, { x: b.x, y: b.y, w: b.size, h: b.size }, S.rotation, cx, cy);
-    }
+    const els = two ? [v, v2] : oneCam ? [v2] : [v];
+    const F = frameBoxes(cw, ch, { screen: comp, layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio }, els.length);
+    if (F.scr) Object.assign(scr.style, { left: `${cx + F.scr.x}px`, top: `${cy + F.scr.y}px`, width: `${F.scr.w}px`, height: `${F.scr.h}px` });
+    els.forEach((el, i) => placeVideo(el, F.cams[i], el === v ? S.rotation : 0, cx, cy));
+    if (split) Object.assign($('divStudio').style, { left: `${cx + (F.scr.x > 0 ? F.scr.x : F.scr.w)}px`, top: `${cy}px`, height: `${ch}px` });
     $('rotOut').textContent = `${S.rotation}°`;
     $('guide').hidden = true;
     return;
@@ -511,7 +519,7 @@ async function connectAudio() {
 }
 
 function renderAudio() {
-  if (S.live) { const { screen, camera } = liveSources(); compositor.setSources(screen, camera); }
+  if (S.live) { const { screen, cameras } = liveSources(); compositor.setSources(screen, cameras); }
   const on = engine.running;
   const screen = !!(S.display && S.display.getVideoTracks().some((t) => t.readyState === 'live'));
   $('chipAudio').className = `chip ${on ? 'on' : ''}`;
@@ -642,9 +650,11 @@ async function startRecording() {
     engine.startRecording(sendBin);
     startScreenRecorder();
     syncBusy();
-    if (S.camSource === 'usb' && S.usb.stream) startUsbRecorder();
-    else if (S.camSource === 'phone' && S.phone) send({ type: 'cam.rec.start', sessionId: res.id });
-    else toast('No camera connected — recording audio' + (S.screenRec ? ' and screen' : '') + ' only.');
+    let cams = 0;
+    if (S.camSource === 'usb' && S.usb.stream) { startUsbRecorder('main'); cams++; }
+    if (S.camSource !== 'usb' && S.phone) { send({ type: 'cam.rec.start', sessionId: res.id }); cams++; }
+    if (S.camSource === 'both' && S.usb.stream) { startUsbRecorder('second'); cams++; }
+    if (!cams) toast('No camera connected — recording audio' + (S.screenRec ? ' and screen' : '') + ' only.');
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -657,7 +667,7 @@ async function stopRecording() {
   r.stopping = true;
   renderRec();
   if (r.pausedAt != null) { r.pauses.push([r.pausedAt, engine.recordedSeconds()]); r.pausedAt = null; }
-  if (S.camSource === 'phone') send({ type: 'cam.rec.stop', sessionId: r.id });
+  if (S.camSource !== 'usb') send({ type: 'cam.rec.stop', sessionId: r.id });
   const audio = await engine.stopRecording();
   await Promise.all([stopScreenRecorder(), stopUsbRecorder()]);
   const saved = waitFor('rec.saved', 90000);
@@ -666,9 +676,10 @@ async function stopRecording() {
     type: 'rec.stop',
     timing: {
       audioStartMs: audio.startMs, audioMarkers: audio.markers, cameraStartMs: r.cameraStartMs,
-      cameraMarkers: r.cameraMarkers, screenStartMs: r.screenStartMs, pauses: r.pauses, calibration: S.calibration,
+      cameraMarkers: r.cameraMarkers, screenStartMs: r.screenStartMs, camera2StartMs: r.camera2StartMs, pauses: r.pauses, calibration: calibrationFor(),
     },
     camera: { width: c.width, height: c.height, fps: Math.round(c.fps || 30), rotation: S.rotation },
+    camera2: S.camSource === 'both' && S.usb.track ? (({ width, height }) => ({ width, height }))(S.usb.track.getSettings()) : null,
     preset: { pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
   });
   toast('Saving session…');
@@ -697,7 +708,7 @@ function togglePause() {
   if (!r || r.stopping) return;
   if (r.pausedAt == null) r.pausedAt = engine.recordedSeconds();
   else { r.pauses.push([r.pausedAt, engine.recordedSeconds()]); r.pausedAt = null; }
-  if (S.camSource === 'phone') send({ type: 'cam.rec.pause', paused: r.pausedAt != null });
+  if (S.camSource !== 'usb') send({ type: 'cam.rec.pause', paused: r.pausedAt != null });
   renderRec();
 }
 
@@ -761,9 +772,10 @@ function liveLayout() {
 }
 function liveSources() {
   const screen = S.display ? S.display.getVideoTracks().find((t) => t.readyState === 'live') : null;
-  const camStream = S.camSource === 'usb' ? S.usb.stream : S.phoneStream;
-  const camera = camStream ? camStream.getVideoTracks().find((t) => t.readyState === 'live') : null;
-  return { screen, camera };
+  const live = (st) => (st ? st.getVideoTracks().find((t) => t.readyState === 'live') : null);
+  const cameras = S.camSource === 'usb' ? [live(S.usb.stream)]
+    : S.camSource === 'both' ? [live(S.phoneStream), live(S.usb.stream)] : [live(S.phoneStream)];
+  return { screen, cameras: cameras.filter(Boolean), camera: cameras.find(Boolean) || null };
 }
 
 function readLiveForm() {
@@ -795,8 +807,8 @@ function renderLive() {
 
 function startLiveEncoder() {
   const L = S.live;
-  const { screen, camera } = liveSources();
-  compositor.setSources(screen, camera);
+  const { screen, cameras } = liveSources();
+  compositor.setSources(screen, cameras);
   const video = compositor.start({ width: L.width, height: L.height, fps: 30, getLayout: liveLayout });
   const audio = engine.liveAudio();
   const tracks = [video, ...(audio ? audio.getAudioTracks() : [])];
@@ -984,14 +996,21 @@ function showCalibration() {
   const c = S.calibration;
   $('calResult').hidden = !c;
   if (c) {
-    $('calVideo').textContent = `${Math.round(c.videoLatencyMs)} ms`;
+    $('calVideo').textContent = [c.videoLatencyMs ? `phone ${Math.round(c.videoLatencyMs)} ms` : '', c.usbLatencyMs ? `USB ${Math.round(c.usbLatencyMs)} ms` : ''].filter(Boolean).join(' · ') || '—';
     $('calAudio').textContent = c.audioLatencyMs ? `${Math.round(c.audioLatencyMs)} ms` : 'not measured';
   }
 }
 
+/** Calibration values for the camera(s) in use: phone in videoLatencyMs, USB in usbLatencyMs. */
+function calibrationFor() {
+  const c = S.calibration;
+  if (!c) return null;
+  const phone = c.videoLatencyMs || 0, usb = c.usbLatencyMs || 0;
+  return { audioLatencyMs: c.audioLatencyMs || 0, videoLatencyMs: S.camSource === 'usb' ? usb : phone, camera2LatencyMs: usb };
+}
+
 let flashDetect = null;
-function startLocalFlashDetect() {
-  const v = $('preview');
+function startLocalFlashDetect(v, edges) {
   const cv = document.createElement('canvas');
   cv.width = cv.height = 24;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -1007,7 +1026,7 @@ function startLocalFlashDetect() {
     // Prefer the camera's own capture time when the browser reports it.
     const t = meta && meta.captureTime ? performance.timeOrigin + meta.captureTime : clockNow();
     if (run.base == null) run.base = luma;
-    if (luma - run.base > 22 && t - run.last > 400 && S.calEdges) { run.last = t; S.calEdges.push(t); }
+    if (luma - run.base > 22 && t - run.last > 400) { run.last = t; edges.push(t); }
     run.base += (luma - run.base) * (luma > run.base ? 0.02 : 0.2);
     v.requestVideoFrameCallback(step);
   };
@@ -1017,10 +1036,14 @@ function stopLocalFlashDetect() { if (flashDetect) flashDetect.on = false; flash
 
 async function runCalibration() {
   $('calStart').disabled = true;
+  const usePhone = S.camSource !== 'usb' && S.phone;
+  const useUsb = S.camSource !== 'phone' && !!S.usb.stream;
+  const usbEdges = [];
   try {
     S.calEdges = [];
-    if (S.camSource === 'usb') startLocalFlashDetect(); else send({ type: 'cal.start' });
-    await sleep(900); // let the phone settle its brightness baseline
+    if (useUsb) startLocalFlashDetect(usbVideo(), usbEdges);
+    if (usePhone) send({ type: 'cal.start' });
+    await sleep(900); // let the cameras settle their brightness baseline
     const flashes = [];
     const audioLat = [];
     for (let i = 0; i < 8; i++) {
@@ -1034,17 +1057,22 @@ async function runCalibration() {
     }
     await sleep(700);
     stopLocalFlashDetect(); send({ type: 'cal.stop' });
-    const lat = [];
-    for (const f of flashes) {
-      const e = S.calEdges.find((t) => t > f + 5 && t < f + 700);
-      if (e != null) lat.push(e - f);
-    }
+    const latencies = (edges) => {
+      const out = [];
+      for (const f of flashes) { const e = edges.find((t) => t > f + 5 && t < f + 700); if (e != null) out.push(e - f); }
+      return out;
+    };
+    const phoneLat = usePhone ? latencies(S.calEdges) : [];
+    const usbLat = useUsb ? latencies(usbEdges) : [];
     S.calEdges = null;
-    if (lat.length < 4) throw new Error('The phone did not see the flashes. Aim it at this screen, move closer and try again.');
+    const missing = [usePhone && phoneLat.length < 4 && 'phone', useUsb && usbLat.length < 4 && 'USB camera'].filter(Boolean);
+    if (missing.length) throw new Error(`The ${missing.join(' and the ')} did not see the flashes. Aim it at this screen, move closer and try again.`);
     const base = engine.running ? (engine.ctx.baseLatency || 0) * 1000 : 0;
+    const prev = S.calibration || {};
     S.calibration = {
-      videoLatencyMs: Math.round(median(lat)),
-      audioLatencyMs: audioLat.length >= 4 ? Math.max(0, Math.round(median(audioLat) - base)) : 0,
+      videoLatencyMs: usePhone ? Math.round(median(phoneLat)) : prev.videoLatencyMs || 0,
+      usbLatencyMs: useUsb ? Math.round(median(usbLat)) : prev.usbLatencyMs || 0,
+      audioLatencyMs: audioLat.length >= 4 ? Math.max(0, Math.round(median(audioLat) - base)) : prev.audioLatencyMs || 0,
       at: new Date().toISOString(),
     };
     await api('/api/settings', 'PUT', { calibration: S.calibration });

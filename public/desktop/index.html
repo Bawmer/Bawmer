@@ -39,6 +39,7 @@
     <div class="stage" id="stage">
       <video id="screenMain" autoplay playsinline muted hidden></video>
       <video id="preview" autoplay playsinline muted></video>
+      <video id="preview2" autoplay playsinline muted hidden></video>
       <div class="guide" id="guide" hidden></div>
       <div class="divider" id="divStudio" hidden title="Drag to resize"></div>
       <div class="stage-empty" id="stageEmpty">
@@ -81,7 +82,7 @@
   <aside class="side">
     <section class="card" id="camCard">
       <header><h3>Camera</h3><span class="state" id="camState">Not connected</span></header>
-      <div class="seg" id="camSrcSeg"><button data-v="phone" class="active">Phone (Wi-Fi)</button><button data-v="usb">USB camera</button></div>
+      <div class="seg" id="camSrcSeg"><button data-v="phone" class="active">Phone (Wi-Fi)</button><button data-v="usb">USB camera</button><button data-v="both">Phone + USB</button></div>
       <label class="usb-row" id="usbRow" hidden>USB camera
         <select id="usbSel"></select>
       </label>
@@ -215,6 +216,7 @@
         <div class="player-box"><div class="player" id="player">
           <video id="edScreen" muted playsinline preload="auto"></video>
           <div class="ed-cam-wrap"><video id="edCam" muted playsinline preload="auto"></video></div>
+          <div class="ed-cam-wrap" id="edCam2Wrap" hidden><video id="edCam2" muted playsinline preload="auto"></video></div>
           <div class="divider" id="divEditor" hidden title="Drag to resize"></div>
           <div class="player-empty" id="playerEmpty" hidden>Audio only</div>
         </div></div>

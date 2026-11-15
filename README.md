@@ -19,7 +19,11 @@ npm run serve      # same engine without Electron; open the printed URL in Chrom
 npm run dist       # build installers (electron-builder)
 ```
 
-1. **Camera:** choose **Phone (Wi-Fi)** or **USB camera** in the Camera card.
+1. **Camera:** choose **Phone (Wi-Fi)**, **USB camera** or **Phone + USB** in the
+   Camera card. *Phone + USB* uses both at once — e.g. the webcam on your face
+   and the phone on your hands — in the preview, the recording, the export and
+   the live stream (two boxes over the DAW, the camera side split in two, or
+   both cameras next to each other under the DAW on vertical streams).
    For a USB webcam just pick it from the list — nothing else to set up.
    For the phone, click **Connect phone** and scan the QR code (same Wi-Fi).
    The phone page uses a private self-signed certificate, so accept the browser

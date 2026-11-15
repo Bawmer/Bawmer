@@ -48,7 +48,7 @@ class Store {
       try {
         const p = this.load(id);
         out.push({ id: p.id, title: p.title, mode: p.mode, createdAt: p.createdAt, duration: p.duration,
-          status: p.status, hasCamera: !!p.camera, hasScreen: !!p.screen, audio: p.audio, exports: (p.exports || []).length });
+          status: p.status, hasCamera: !!p.camera, hasCamera2: !!p.camera2, hasScreen: !!p.screen, audio: p.audio, exports: (p.exports || []).length });
       } catch { /* not a session folder */ }
     }
     return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

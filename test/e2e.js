@@ -164,7 +164,36 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     const d2 = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe(`../${id2}/${p2.camera.file}`));
     const s2 = d2 ? +d2[2] * 60 + +d2[3] : 0;
     assert(Math.abs(s2 - p2.duration) < 1.5 && Math.abs(p2.sync.cameraOffsetSec) < 1, `USB camera video matches the audio (${s2.toFixed(1)} s vs ${p2.duration.toFixed(1)} s, offset ${p2.sync.cameraOffsetSec.toFixed(3)} s)`);
-    // ── Live stream to a local RTMP receiver (stands in for Instagram / TikTok) ──
+    // ── Phone + USB camera together ──
+    await desk.click('.tab[data-view="studio"]');
+    await desk.click('#camSrcSeg [data-v="both"]');
+    await desk.waitForFunction(() => /Phone live · USB live/.test(document.getElementById('chipCam').textContent), null, { timeout: 20000 });
+    await desk.waitForFunction(() => document.getElementById('preview2').videoWidth > 0 && document.getElementById('preview').videoWidth > 0, null, { timeout: 10000 });
+    const both = await desk.evaluate(() => {
+      const r = (id) => document.getElementById(id).getBoundingClientRect();
+      const a = r('preview'), b = r('preview2'), s = r('screenMain');
+      const inside = (x) => x.left >= s.left - 1 && x.right <= s.right + 1 && x.top >= s.top - 1 && x.bottom <= s.bottom + 1;
+      return { visible: !document.getElementById('preview2').hidden, apart: a.right <= b.left + 1 || b.right <= a.left + 1, inside: inside(a) && inside(b) };
+    });
+    assert(both.visible && both.apart && both.inside, 'studio preview shows the DAW with the phone and the USB camera as two boxes');
+    if (shots) await desk.screenshot({ path: path.join(shots, 'both.png') });
+    await desk.click('#recBtn');
+    await desk.waitForSelector('#recBadge:not([hidden])');
+    await sleep(5000);
+    await desk.click('#recBtn');
+    await desk.waitForFunction((prev) => document.querySelector('#sessionList li.active') && document.querySelector('#sessionList li.active').dataset.id !== prev, id2, { timeout: 60000 });
+    const id3 = await desk.evaluate(() => document.querySelector('#sessionList li.active').dataset.id);
+    const p3 = (await (await dctx.request.get(`${server.localUrl}api/sessions/${id3}`)).json()).project;
+    assert(!!p3.camera && !!p3.camera2, `phone and USB camera both recorded (${p3.camera && p3.camera.file} + ${p3.camera2 && p3.camera2.file})`);
+    assert(Number.isFinite(p3.sync.camera2OffsetSec) && Math.abs(p3.sync.camera2OffsetSec) < 1, `USB camera aligned to the audio (offset ${p3.sync.camera2OffsetSec.toFixed(3)} s)`);
+    assert(await desk.evaluate(() => !document.getElementById('edCam2Wrap').hidden), 'editor shows both cameras');
+    await desk.click('#expMp4');
+    await desk.waitForFunction(() => document.querySelectorAll('#exportList li').length === 1, null, { timeout: 60000 });
+    const exp3 = fs.readdirSync(path.join(dataDir, 'Sessions', id3, 'exports')).find((f) => f.endsWith('.mp4'));
+    assert(/Video: h264/.test(probe(`../${id3}/exports/${exp3}`)), 'two-camera MP4 export works');
+    if (shots) execFileSync(ffmpegPath(), ['-y', '-loglevel', 'error', '-ss', '2', '-i', path.join(dataDir, 'Sessions', id3, 'exports', exp3), '-frames:v', '1', path.join(shots, 'both-export.png')]);
+
+    // ── Live stream to a local RTMP receiver (stands in for Instagram / TikTok), with both cameras ──
     const flv = path.join(dataDir, 'live-received.flv');
     const rtmpPort = 19350 + Math.floor(Math.random() * 400);
     const receiver = spawn(ffmpegPath(), ['-hide_banner', '-loglevel', 'error', '-listen', '1', '-i', `rtmp://127.0.0.1:${rtmpPort}/live/secretkey`, '-c', 'copy', '-y', flv]);

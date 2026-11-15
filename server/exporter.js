@@ -53,6 +53,30 @@ function canvasSize(aspect, quality) {
   return { w: even((q * 16) / 9), h: q };
 }
 
+/**
+ * Where everything goes in a frame: the DAW screen (fitted, never cropped)
+ * and zero, one or two cameras (filled). Keep in sync with
+ * public/desktop/util.js (frameBoxes).
+ */
+function frameBoxes(w, h, o, n) {
+  const full = { x: 0, y: 0, w, h };
+  const halves = (c, sideBySide) => {
+    if (sideBySide) { const a = even(c.w / 2); return [{ x: c.x, y: c.y, w: a, h: c.h }, { x: c.x + a, y: c.y, w: c.w - a, h: c.h }]; }
+    const a = even(c.h / 2);
+    return [{ x: c.x, y: c.y, w: c.w, h: a }, { x: c.x, y: c.y + a, w: c.w, h: c.h - a }];
+  };
+  if (!o.screen) return { scr: null, cams: n === 0 ? [] : n === 1 ? [full] : halves(full, w >= h) };
+  if (n === 0) return { scr: full, cams: [] };
+  if (o.layout === 'split') {
+    const sb = splitBoxes(w, h, o.splitSide, o.splitRatio);
+    return { scr: sb.scr, cams: n === 1 ? [sb.cam] : halves(sb.cam, !sb.wide), wide: sb.wide };
+  }
+  const corner = ['tl', 'tr', 'bl', 'br'].includes(o.pipCorner) ? o.pipCorner : 'br';
+  const corners = [corner, corner[0] + (corner[1] === 'l' ? 'r' : 'l')]; // second camera: mirrored corner
+  const cams = corners.slice(0, n).map((c) => { const b = pipBox(w, h, o.pipSize, c); return { x: b.x, y: b.y, w: b.size, h: b.size, outline: true }; });
+  return { scr: full, cams };
+}
+
 function rotateFilter(deg) {
   const d = ((Number(deg) || 0) % 360 + 360) % 360;
   if (d === 90) return 'transpose=1,';
@@ -73,18 +97,24 @@ function buildMp4Args(project, dir, edit, outFile) {
   const sync = project.sync || {};
 
   const hasCam = !!project.camera;
+  const hasCam2 = !!project.camera2;
   const hasScreen = !!project.screen;
   let layout = e.layout || 'camera';
-  if (!hasCam && !hasScreen) throw new Error('This session has no video to export.');
+  if (!hasCam && !hasCam2 && !hasScreen) throw new Error('This session has no video to export.');
   if (!hasScreen) layout = 'camera';
-  if (!hasCam) layout = 'screen';
+  if (!hasCam && !hasCam2) layout = 'screen';
+  const useScreen = layout !== 'camera';
+  const useCams = layout !== 'screen';
 
   const inputs = [];
   const add = (file) => { inputs.push('-i', path.join(dir, file)); return inputs.length / 2 - 1; };
   const audioIdx = add(project.audio.file);
   const micIdx = e.includeMic && project.mic ? add(project.mic.file) : -1;
-  const camIdx = layout !== 'screen' ? add(project.camera.file) : -1;
-  const scrIdx = layout !== 'camera' ? add(project.screen.file) : -1;
+  const scrIdx = useScreen ? add(project.screen.file) : -1;
+  const cams = [];
+  const manual = (Number(e.manualOffsetMs) || 0) / 1000;
+  if (useCams && hasCam) cams.push({ idx: add(project.camera.file), off: (sync.cameraOffsetSec || 0) + manual, rate: sync.cameraRate || 1, pre: rotateFilter(e.rotation) });
+  if (useCams && hasCam2) cams.push({ idx: add(project.camera2.file), off: (sync.camera2OffsetSec || 0) + manual, rate: 1, pre: '' });
 
   // Put a video on the audio timeline, make it constant-rate, cut pauses/trim.
   // The pad holds the last frame if a video ends early; it must be finite or
@@ -100,26 +130,27 @@ function buildMp4Args(project, dir, edit, outFile) {
     `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`;
 
   const chains = [];
-  if (camIdx >= 0) {
-    const off = (sync.cameraOffsetSec || 0) + (Number(e.manualOffsetMs) || 0) / 1000;
-    chains.push(onTimeline(camIdx, off, sync.cameraRate || 1, rotateFilter(e.rotation), 'cam'));
-  }
   if (scrIdx >= 0) chains.push(onTimeline(scrIdx, sync.screenOffsetSec || 0, 1, '', 'scr'));
+  cams.forEach((c, i) => chains.push(onTimeline(c.idx, c.off, c.rate, c.pre, `cam${i}`)));
 
-  if (layout === 'camera') chains.push(`[cam]${fill(w, h)}[v]`);
-  else if (layout === 'screen') chains.push(`[scr]${fit(w, h)}[v]`);
-  else if (layout === 'pip') {
-    const box = pipBox(w, h, e.pipSize, e.pipCorner);
-    const b = Math.max(2, even(box.size * 0.01)); // thin outline so the box reads against a dark DAW
-    const inner = box.size - 2 * b;
-    chains.push(`[scr]${fit(w, h)}[bg]`,
-      `[cam]${fill(inner, inner)},pad=${box.size}:${box.size}:${b}:${b}:color=0x2ff3e0[pip]`,
-      `[bg][pip]overlay=${box.x}:${box.y}[v]`);
-  } else { // split: complete DAW + camera, side by side (or stacked on tall canvases)
-    const sb = splitBoxes(w, h, e.splitSide, e.splitRatio);
-    chains.push(`[scr]${fit(sb.scr.w, sb.scr.h)}[a]`, `[cam]${fill(sb.cam.w, sb.cam.h)}[b]`,
-      `${sb.camFirst ? '[b][a]' : '[a][b]'}${sb.wide ? 'hstack' : 'vstack'}=inputs=2[v]`);
-  }
+  // Black canvas, then the DAW screen, then each camera on top.
+  const L = frameBoxes(w, h, { screen: useScreen, layout, pipSize: e.pipSize, pipCorner: e.pipCorner, splitSide: e.splitSide, splitRatio: e.splitRatio }, cams.length);
+  chains.push(`color=c=black:s=${w}x${h}:r=${fps}:d=${f(total)}[base0]`);
+  let base = 'base0', step = 0;
+  const layer = (label, box) => {
+    const next = `base${++step}`;
+    chains.push(`[${base}][${label}]overlay=${box.x}:${box.y}[${next}]`);
+    base = next;
+  };
+  if (L.scr) { chains.push(`[scr]${fit(L.scr.w, L.scr.h)}[s]`); layer('s', L.scr); }
+  L.cams.forEach((box, i) => {
+    if (box.outline) {
+      const b = Math.max(2, even(box.w * 0.01)); // thin outline so the box reads against a dark DAW
+      chains.push(`[cam${i}]${fill(box.w - 2 * b, box.h - 2 * b)},pad=${box.w}:${box.h}:${b}:${b}:color=0x2ff3e0[c${i}]`);
+    } else chains.push(`[cam${i}]${fill(box.w, box.h)}[c${i}]`);
+    layer(`c${i}`, box);
+  });
+  chains.push(`[${base}]null[v]`);
 
   // Audio: sample-accurate cuts, never time-stretched.
   const cutAudio = (idx, label) => {
@@ -189,4 +220,4 @@ async function remux(src, dst, isMp4) {
   await runFfmpeg(args);
 }
 
-module.exports = { pipBox, splitBoxes, buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };
+module.exports = { frameBoxes, pipBox, splitBoxes, buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };
