@@ -25,10 +25,12 @@ const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
 // Wide canvases put the camera in a third of the width (left or right);
 // tall/square canvases stack them, with a full-width 16:9 DAW panel.
 // Keep in sync with public/desktop/util.js (splitBoxes).
-function splitBoxes(w, h, side) {
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+function splitBoxes(w, h, side, ratio) {
   const camFirst = side === 'left';
   if (w > h) {
-    const cw = even(w / 3), sw = w - cw;
+    const r = clamp(Number(ratio) || 1 / 3, 0.2, 0.5); // camera's share of the width
+    const cw = even(w * r), sw = w - cw;
     return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
   }
   const sh = Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
@@ -36,7 +38,8 @@ function splitBoxes(w, h, side) {
 }
 
 function pipBox(w, h, size, corner) {
-  const s = even(Math.min(w, h) * (PIP_SIZES[size] || PIP_SIZES.small));
+  const f = typeof size === 'number' ? clamp(size, 0.15, 0.6) : PIP_SIZES[size] || PIP_SIZES.small;
+  const s = even(Math.min(w, h) * f);
   const m = even(Math.min(w, h) * 0.03);
   const c = ['tl', 'tr', 'bl', 'br'].includes(corner) ? corner : 'br';
   return { size: s, x: c[1] === 'l' ? m : w - s - m, y: c[0] === 't' ? m : h - s - m };
@@ -113,7 +116,7 @@ function buildMp4Args(project, dir, edit, outFile) {
       `[cam]${fill(inner, inner)},pad=${box.size}:${box.size}:${b}:${b}:color=0x2ff3e0[pip]`,
       `[bg][pip]overlay=${box.x}:${box.y}[v]`);
   } else { // split: complete DAW + camera, side by side (or stacked on tall canvases)
-    const sb = splitBoxes(w, h, e.splitSide);
+    const sb = splitBoxes(w, h, e.splitSide, e.splitRatio);
     chains.push(`[scr]${fit(sb.scr.w, sb.scr.h)}[a]`, `[cam]${fill(sb.cam.w, sb.cam.h)}[b]`,
       `${sb.camFirst ? '[b][a]' : '[a][b]'}${sb.wide ? 'hstack' : 'vstack'}=inputs=2[v]`);
   }

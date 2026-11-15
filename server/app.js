@@ -16,7 +16,7 @@ const { lanAddresses, loadCertificate } = require('./net');
 const { detectDaws } = require('./daw');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
-const KIND = { DAW: 1, MIC: 2, SCREEN: 3, CAMERA: 4 };
+const KIND = { DAW: 1, MIC: 2, SCREEN: 3, CAMERA: 4, USBCAM: 5 };
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json',
@@ -165,7 +165,7 @@ async function start(opts = {}) {
       p.edit = {
         trimStart: 0, trimEnd: p.duration, manualOffsetMs: 0, rotation: Number(cm.rotation) || 0,
         quality: 1080, fps: [24, 30, 60].includes(cm.fps) ? cm.fps : 30, includeMic: !!p.mic,
-        pipSize: 'small', pipCorner: 'br', splitSide: 'right',
+        pipSize: 'small', pipCorner: 'br', splitSide: 'right', splitRatio: 1 / 3,
         ...MODE_DEFAULTS[p.mode], ...(msg.preset || {}),
       };
       p.status = 'ready';
@@ -188,13 +188,18 @@ async function start(opts = {}) {
         const copy = new Uint8Array(bytes); // realign for Float32Array
         copy.set(buf.subarray(4, 4 + bytes));
         w.write(new Float32Array(copy.buffer));
+      } else if (kind === KIND.USBCAM) {
+        // USB camera recorded on this computer: same clock as the audio, no upload to wait for.
+        if (!rec.cam || !rec.cam.local || rec.cam.fd == null) return;
+        fs.writeSync(rec.cam.fd, buf, 4, buf.length - 4);
+        rec.cam.bytes += buf.length - 4;
       } else if (kind === KIND.SCREEN) {
         if (!rec.screen) rec.screen = openVideo('screen', 'video/webm');
         if (rec.screen.fd == null) return;
         fs.writeSync(rec.screen.fd, buf, 4, buf.length - 4);
         rec.screen.bytes += buf.length - 4;
       }
-    } else if (kind === KIND.CAMERA && rec.cam && rec.cam.fd != null) {
+    } else if (kind === KIND.CAMERA && rec.cam && !rec.cam.local && rec.cam.fd != null) {
       const seq = buf.readUInt32LE(4);
       if (seq === rec.cam.seq + 1) {
         fs.writeSync(rec.cam.fd, buf, 8, buf.length - 8);
@@ -209,6 +214,9 @@ async function start(opts = {}) {
     try {
       if (msg.type === 'rec.start') toDesktop({ type: 'rec.started', id: startRecording(msg) });
       else if (msg.type === 'rec.stop') toDesktop({ type: 'rec.saved', id: await stopRecording(msg) });
+      else if (msg.type === 'usbcam.begin') {
+        if (rec && !rec.cam && !rec.stopping) rec.cam = Object.assign(openVideo('camera', String(msg.mime || 'video/webm')), { done: true, local: true });
+      }
       else toPhone(msg);
     } catch (e) {
       toDesktop({ type: 'rec.error', message: e.message });

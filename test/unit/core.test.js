@@ -87,3 +87,11 @@ test('side by side: complete DAW panel + camera panel, no overlap', () => {
   assert.match(graph, /\[cam\]scale=640:1080:force_original_aspect_ratio=increase,crop=640:1080/);
   assert.match(graph, /\[b\]\[a\]hstack=inputs=2\[v\]/);
 });
+
+test('resizing: camera share and box size are adjustable and clamped', () => {
+  assert.equal(splitBoxes(1920, 1080, 'right', 0.25).cam.w, 480);
+  assert.equal(splitBoxes(1920, 1080, 'right', 0.9).cam.w, 960); // max 50 %
+  assert.equal(splitBoxes(1920, 1080, 'right', 0.05).cam.w, 384); // min 20 %
+  assert.equal(pipBox(1920, 1080, 0.5, 'br').size, 540);
+  assert.equal(pipBox(1920, 1080, 2, 'br').size, 648); // max 60 %
+});

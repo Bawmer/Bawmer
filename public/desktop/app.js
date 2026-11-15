@@ -1,8 +1,9 @@
-import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner } from './util.js';
+import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
 import { AudioEngine, clockNow } from './audio-engine.js';
 import { initEditor, openSession, refreshSessions, onExportMessage } from './editor.js';
 
 const KIND_SCREEN = 3;
+const KIND_USBCAM = 5;
 const VIRTUAL = /blackhole|loopback|vb-audio|cable|soundflower|voicemeeter|stereo mix|what u hear|virtual|ground control|existential/i;
 const MODES = {
   studio: { screen: true, guide: null },
@@ -14,7 +15,8 @@ const MODES = {
 const engine = new AudioEngine();
 const S = {
   app: null, ws: null, phone: false, cam: null, pc: null, pendingIce: [],
-  mode: 'studio', rotation: 0, layout: 'split', splitSide: 'right', pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
+  mode: 'studio', rotation: 0, layout: 'split', splitSide: 'right', splitRatio: 1 / 3,
+  camSource: 'phone', usb: { stream: null, track: null, deviceId: null, height: 1080 }, usbRec: null, pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
   rec: null, // { id, pauses, pausedAt, cameraStartMs, cameraMarkers, screenStartMs, stopping }
   waiters: new Map(), calEdges: null, savedOnce: false,
 };
@@ -48,7 +50,7 @@ function onMessage(msg) {
       if (S.pc && S.pc.remoteDescription) S.pc.addIceCandidate(msg.candidate).catch(() => {});
       else S.pendingIce.push(msg.candidate);
       break;
-    case 'cam.state': S.cam = msg; renderCam(); break;
+    case 'cam.state': if (S.camSource === 'phone') { S.cam = msg; renderCam(); } break;
     case 'cam.rec.started':
       if (S.rec && msg.sessionId === S.rec.id) { S.rec.cameraStartMs = msg.startMs; S.rec.cameraMime = msg.mime; }
       break;
@@ -75,8 +77,8 @@ function setPhone(connected) {
     toast('Phone connected', 'ok');
   } else {
     if (S.pc) { S.pc.close(); S.pc = null; }
-    $('preview').srcObject = null;
-    S.cam = null;
+    S.phoneStream = null;
+    if (S.camSource === 'phone') { $('preview').srcObject = null; S.cam = null; }
   }
   renderCam();
 }
@@ -87,7 +89,8 @@ async function onOffer(msg) {
   S.pc = pc;
   pc.ontrack = (e) => {
     try { e.receiver.jitterBufferTarget = 0; } catch { /* optional */ }
-    $('preview').srcObject = e.streams[0] || new MediaStream([e.track]);
+    S.phoneStream = e.streams[0] || new MediaStream([e.track]);
+    if (S.camSource === 'phone') $('preview').srcObject = S.phoneStream;
     renderCam();
   };
   pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'rtc.ice', candidate: e.candidate }); };
@@ -102,25 +105,171 @@ async function onOffer(msg) {
   }
 }
 
-const camSet = (patch) => send({ type: 'cam.set', ...patch });
+const camSet = (patch) => (S.camSource === 'usb' ? usbSet(patch) : send({ type: 'cam.set', ...patch }));
 const camSetSoon = debounce(camSet, 60);
+
+// ───────────────────────────────────────────── USB camera (plugged into this computer)
+function usbState() {
+  const t = S.usb.track;
+  if (!t || t.readyState !== 'live') return null;
+  const s = t.getSettings(), c = t.getCapabilities ? t.getCapabilities() : {};
+  const range = (r) => (r && typeof r.max === 'number' && r.max > r.min ? { min: r.min, max: r.max, step: r.step || 0.1 } : null);
+  // Webcams usually expose brightness rather than exposure compensation.
+  const expKey = range(c.exposureCompensation) ? 'exposureCompensation' : range(c.brightness) ? 'brightness' : null;
+  S.usb.expKey = expKey;
+  return {
+    usb: true, label: t.label, width: s.width, height: s.height, fps: s.frameRate, requestedHeight: S.usb.height,
+    caps: { zoom: range(c.zoom), exposure: expKey ? range(c[expKey]) : null, expRaw: expKey === 'brightness',
+      focus: c.focusMode && c.focusMode.includes('manual') ? range(c.focusDistance) : null, torch: !!c.torch },
+    zoom: s.zoom, exposure: expKey ? s[expKey] : null, focusMode: s.focusMode, torch: !!s.torch,
+  };
+}
+
+async function listUsb() {
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  const prev = $('usbSel').value || S.usb.deviceId || S.app.prefs.usbDevice;
+  $('usbSel').innerHTML = cams.length
+    ? cams.map((d, i) => `<option value="${d.deviceId}">${(d.label || `Camera ${i + 1}`).replace(/</g, '&lt;')}</option>`).join('')
+    : '<option value="">No camera found — plug one in</option>';
+  if (cams.some((d) => d.deviceId === prev)) $('usbSel').value = prev;
+  return cams.length;
+}
+
+function stopUsb() {
+  if (S.usb.stream) S.usb.stream.getTracks().forEach((t) => t.stop());
+  S.usb.stream = S.usb.track = null;
+}
+
+async function startUsb() {
+  if (S.usbRec) return;
+  stopUsb();
+  const h = Number($('resSel').value), fps = Number($('fpsSel').value);
+  const id = $('usbSel').value;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { ...(id ? { deviceId: { exact: id } } : {}), width: { ideal: Math.round((h * 16) / 9) }, height: { ideal: h }, frameRate: { ideal: fps } },
+    });
+    if (S.camSource !== 'usb') { stream.getTracks().forEach((t) => t.stop()); return; }
+    S.usb.stream = stream;
+    S.usb.track = stream.getVideoTracks()[0];
+    S.usb.track.contentHint = 'motion';
+    S.usb.height = h;
+    S.usb.deviceId = S.usb.track.getSettings().deviceId || id;
+    S.usb.track.addEventListener('ended', () => {
+      if (S.usb.stream !== stream) return;
+      toast('The USB camera was disconnected.', 'error');
+      stopUsb(); S.cam = null; $('preview').srcObject = null; renderCam();
+    });
+    $('preview').srcObject = stream;
+    S.cam = usbState();
+    await listUsb();
+    $('usbSel').value = S.usb.deviceId;
+    savePrefs();
+  } catch (e) {
+    S.cam = null;
+    toast(e.name === 'NotAllowedError' ? 'Camera access was blocked. Allow the camera for DAW LIVE CAM in Windows privacy settings.' : `USB camera: ${e.message}`, 'error');
+  }
+  renderCam();
+}
+
+async function usbSet(patch) {
+  try {
+    if (patch.height || patch.fps) { if (!S.usbRec) await startUsb(); return; }
+    const t = S.usb.track;
+    if (!t) return;
+    const adv = {};
+    if (patch.zoom != null) adv.zoom = patch.zoom;
+    if (patch.exposure != null && S.usb.expKey) {
+      if (S.usb.expKey === 'exposureCompensation') adv.exposureMode = 'continuous';
+      adv[S.usb.expKey] = patch.exposure;
+    }
+    if (patch.focusMode) adv.focusMode = patch.focusMode;
+    if (patch.focusDistance != null) { adv.focusMode = 'manual'; adv.focusDistance = patch.focusDistance; }
+    if (patch.torch != null) adv.torch = !!patch.torch;
+    await t.applyConstraints({ advanced: [adv] });
+  } catch (e) {
+    toast(`This camera does not support that setting (${e.message}).`, 'error');
+  }
+  S.cam = usbState();
+  renderCam();
+}
+
+async function setCamSource(src) {
+  if (S.rec || S.camSource === src) return;
+  S.camSource = src;
+  setSeg($('camSrcSeg'), src);
+  S.cam = null;
+  $('preview').srcObject = null;
+  if (src === 'usb') {
+    renderCam();
+    await startUsb();
+  } else {
+    stopUsb();
+    $('preview').srcObject = S.phoneStream || null;
+    if (S.phone) send({ type: 'hello', calibrated: !!S.calibration }); // ask the phone for its state again
+    renderCam();
+  }
+  savePrefs();
+}
+
+function startUsbRecorder() {
+  if (S.camSource !== 'usb' || !S.usb.stream) return;
+  const mime = ['video/webm;codecs=h264', 'video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find((m) => MediaRecorder.isTypeSupported(m));
+  const s = S.usb.track.getSettings();
+  const short = Math.min(s.width || 1080, s.height || 1080);
+  const bitrate = (short >= 2000 ? 40e6 : short >= 1000 ? 14e6 : 7e6) * ((s.frameRate || 30) > 40 ? 1.5 : 1);
+  send({ type: 'usbcam.begin', mime });
+  const mr = new MediaRecorder(S.usb.stream, { mimeType: mime, videoBitsPerSecond: bitrate });
+  let chain = Promise.resolve();
+  mr.onstart = () => { if (S.rec) S.rec.cameraStartMs = clockNow(); };
+  mr.ondataavailable = (e) => {
+    if (!e.data.size) return;
+    chain = chain.then(async () => {
+      const out = new Uint8Array(4 + e.data.size);
+      new DataView(out.buffer).setUint32(0, KIND_USBCAM, true);
+      out.set(new Uint8Array(await e.data.arrayBuffer()), 4);
+      sendBin(out);
+    });
+  };
+  mr.start(1000);
+  S.usbRec = { mr, flushed: () => chain };
+  renderCam();
+}
+
+async function stopUsbRecorder() {
+  const r = S.usbRec;
+  S.usbRec = null;
+  if (!r) return;
+  if (r.mr.state !== 'inactive') await new Promise((resolve) => { r.mr.onstop = resolve; r.mr.stop(); });
+  await r.flushed();
+}
 
 function renderCam() {
   const c = S.cam;
-  const live = S.phone && !!$('preview').srcObject;
-  const recLost = S.rec && !S.phone;
-  $('stageEmpty').hidden = S.phone;
+  const usb = S.camSource === 'usb';
+  const connected = usb ? !!S.usb.stream : S.phone;
+  const live = connected && !!$('preview').srcObject;
+  const recLost = S.rec && !usb && !S.phone;
+  $('stageEmpty').hidden = connected;
+  $('emptyTitle').textContent = usb ? 'Plug in a USB camera' : 'Connect a camera';
+  $('usbRow').hidden = !usb;
+  $('facingRow').hidden = usb;
+  $('pairBtn2').hidden = usb;
+  for (const b of $('camSrcSeg').querySelectorAll('button')) b.disabled = !!S.rec;
+  $('usbSel').disabled = !!S.rec;
   $('camStats').hidden = $('camControls').hidden = !c;
   $('calBtn').disabled = !c || !!S.rec;
   const chip = $('chipCam');
-  chip.className = `chip ${recLost ? 'warn' : S.phone ? 'on' : ''}`;
+  chip.className = `chip ${recLost ? 'warn' : connected ? 'on' : ''}`;
   chip.lastElementChild.textContent = recLost ? 'Reconnecting — phone keeps recording'
-    : live ? 'Camera live' : S.phone ? 'Camera starting…' : 'Camera offline';
-  $('camState').textContent = S.phone ? (c ? 'Connected' : 'Waiting for camera…') : 'Not connected';
-  $('camState').className = `state ${S.phone ? 'on' : ''}`;
+    : live ? (usb ? 'USB camera live' : 'Camera live') : connected ? 'Camera starting…' : 'Camera offline';
+  $('camState').textContent = connected ? (c ? 'Connected' : 'Waiting for camera…') : 'Not connected';
+  $('camState').className = `state ${connected ? 'on' : ''}`;
   if (c) {
-    $('statBattery').textContent = c.battery ? `${Math.round(c.battery.level * 100)}%${c.battery.charging ? ' ⚡' : ''}` : 'n/a';
-    $('statLink').textContent = c.rtt != null ? `${Math.round(c.rtt)} ms` : '—';
+    $('statBattery').textContent = usb ? 'Mains' : c.battery ? `${Math.round(c.battery.level * 100)}%${c.battery.charging ? ' ⚡' : ''}` : 'n/a';
+    $('statLink').textContent = usb ? 'USB' : c.rtt != null ? `${Math.round(c.rtt)} ms` : '—';
     $('statFormat').textContent = c.width ? `${Math.min(c.width, c.height)}p${Math.round(c.fps || 0)}` : '—';
     setSeg($('facingSeg'), c.facing);
     const busy = !!S.rec;
@@ -134,7 +283,7 @@ function renderCam() {
       out.textContent = fmt(Number(input.value));
     };
     range($('zoomRow'), $('zoom'), $('zoomOut'), caps.zoom, c.zoom, (v) => `${v.toFixed(1)}×`);
-    range($('expRow'), $('exposure'), $('expOut'), caps.exposure, c.exposure, (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)} EV`);
+    range($('expRow'), $('exposure'), $('expOut'), caps.exposure, c.exposure, (v) => (caps.expRaw ? String(Math.round(v)) : `${v > 0 ? '+' : ''}${v.toFixed(1)} EV`));
     $('focusRow').hidden = !caps.focus;
     if (caps.focus) {
       $('focus').min = caps.focus.min; $('focus').max = caps.focus.max; $('focus').step = caps.focus.step || 0.01;
@@ -146,7 +295,7 @@ function renderCam() {
     const limited = !caps.zoom && !caps.exposure && !caps.focus;
     $('camHint').textContent = [
       c.requestedHeight && c.height && Math.min(c.width, c.height) < c.requestedHeight ? `This camera delivers ${Math.min(c.width, c.height)}p at most in the browser.` : '',
-      limited ? 'This phone browser does not expose zoom, focus or exposure controls; pinch and tap on the phone instead.' : '',
+      limited ? (usb ? 'This webcam does not offer zoom, focus or exposure controls to apps.' : 'This phone browser does not expose zoom, focus or exposure controls; pinch and tap on the phone instead.') : '',
       c.hidden ? 'The phone page is in the background — bring it to the front.' : '',
     ].filter(Boolean).join(' ');
   }
@@ -166,20 +315,29 @@ function layoutPreview() {
   stage.classList.toggle('composite', comp);
   stage.classList.toggle('split', split);
   $('layoutRowStudio').hidden = !comp;
-  $('pipRowStudio').hidden = !comp || split;
+  $('camSizeRowStudio').hidden = !comp;
+  $('cornerRowStudio').hidden = !comp || split;
+  $('divStudio').hidden = !split;
+  S.frame = null;
+  if (comp && document.activeElement !== $('camSizeStudio')) {
+    $('camSizeStudio').value = split ? toSlider('split', S.splitRatio) : toSlider('pip', pipFraction(S.pipSize));
+  }
+  $('camSizeOutStudio').textContent = split ? `${Math.round(S.splitRatio * 100)}% of the width` : `${Math.round(pipFraction(S.pipSize) * 100)}% of the height`;
   $('swapStudio').hidden = !split;
   setSeg($('layoutStudio'), S.layout);
-  setSeg($('pipSizeStudio'), S.pipSize);
   setSeg($('pipCornerStudio'), S.pipCorner);
   if (comp) {
     // The 16:9 frame of the final video, exactly as it will be exported.
     const cw = Math.min(sw, (sh * 16) / 9), ch = (cw * 9) / 16;
     const cx = (sw - cw) / 2, cy = (sh - ch) / 2;
+    S.frame = { cx, cy, cw, ch };
     if (split) {
       // Two screens: complete DAW in one panel, you in the other.
-      const sb = splitBoxes(cw, ch, S.splitSide);
+      const sb = splitBoxes(cw, ch, S.splitSide, S.splitRatio);
       Object.assign(scr.style, { left: `${cx + sb.scr.x}px`, top: `${cy + sb.scr.y}px`, width: `${sb.scr.w}px`, height: `${sb.scr.h}px` });
       placeVideo(v, sb.cam, S.rotation, cx, cy);
+      const dx = cx + (sb.camFirst ? sb.cam.w : sb.scr.w);
+      Object.assign($('divStudio').style, { left: `${dx}px`, top: `${cy}px`, height: `${ch}px` });
     } else {
       Object.assign(scr.style, { left: `${cx}px`, top: `${cy}px`, width: `${cw}px`, height: `${ch}px` });
       const b = pipBox(cw, ch, S.pipSize, S.pipCorner);
@@ -254,7 +412,8 @@ async function pickScreenSource() {
   const list = await window.dlcNative.listSources();
   if (!list.length) throw new Error('Nothing to record was found on this computer.');
   const dlg = $('srcDlg'), grid = $('srcGrid');
-  let chosen = (list.find((x) => x.kind === 'window' && DAW_WINDOW.test(x.name)) || list.find((x) => x.kind === 'screen') || list[0]).id;
+  // Default: the whole screen, so a full-screen DAW is captured completely.
+  let chosen = (list.find((x) => x.kind === 'screen') || list[0]).id;
   grid.innerHTML = '';
   for (const src of list) {
     const b = document.createElement('button');
@@ -474,8 +633,9 @@ async function startRecording() {
     S.rec = { id: res.id, pauses: [], pausedAt: null, cameraStartMs: null, cameraMarkers: [], screenStartMs: null };
     engine.startRecording(sendBin);
     startScreenRecorder();
-    if (S.phone) send({ type: 'cam.rec.start', sessionId: res.id });
-    else toast('No phone connected — recording audio' + (S.screenRec ? ' and screen' : '') + ' only.');
+    if (S.camSource === 'usb' && S.usb.stream) startUsbRecorder();
+    else if (S.camSource === 'phone' && S.phone) send({ type: 'cam.rec.start', sessionId: res.id });
+    else toast('No camera connected — recording audio' + (S.screenRec ? ' and screen' : '') + ' only.');
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -488,9 +648,9 @@ async function stopRecording() {
   r.stopping = true;
   renderRec();
   if (r.pausedAt != null) { r.pauses.push([r.pausedAt, engine.recordedSeconds()]); r.pausedAt = null; }
-  send({ type: 'cam.rec.stop', sessionId: r.id });
+  if (S.camSource === 'phone') send({ type: 'cam.rec.stop', sessionId: r.id });
   const audio = await engine.stopRecording();
-  await stopScreenRecorder();
+  await Promise.all([stopScreenRecorder(), stopUsbRecorder()]);
   const saved = waitFor('rec.saved', 90000);
   const c = S.cam || {};
   send({
@@ -500,7 +660,7 @@ async function stopRecording() {
       cameraMarkers: r.cameraMarkers, screenStartMs: r.screenStartMs, pauses: r.pauses, calibration: S.calibration,
     },
     camera: { width: c.width, height: c.height, fps: Math.round(c.fps || 30), rotation: S.rotation },
-    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
+    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
   });
   toast('Saving session…');
   try {
@@ -526,7 +686,7 @@ function togglePause() {
   if (!r || r.stopping) return;
   if (r.pausedAt == null) r.pausedAt = engine.recordedSeconds();
   else { r.pauses.push([r.pausedAt, engine.recordedSeconds()]); r.pausedAt = null; }
-  send({ type: 'cam.rec.pause', paused: r.pausedAt != null });
+  if (S.camSource === 'phone') send({ type: 'cam.rec.pause', paused: r.pausedAt != null });
   renderRec();
 }
 
@@ -563,8 +723,8 @@ function renderRec() {
 // ───────────────────────────────────────────── workflow steps & storage
 function renderSteps() {
   const done = {
-    phone: S.phone, daw: engine.running,
-    preview: S.phone && engine.running && !!$('preview').srcObject,
+    phone: S.camSource === 'usb' ? !!S.usb.stream : S.phone, daw: engine.running,
+    preview: (S.camSource === 'usb' ? !!S.usb.stream : S.phone) && engine.running && !!$('preview').srcObject,
     record: S.savedOnce, export: false,
   };
   let seenNow = false;
@@ -592,7 +752,7 @@ function savePrefs() {
   api('/api/settings', 'PUT', { prefs: {
     source: $('srcSel').value, sampleRate: $('rateSel').value, bitDepth: $('bitSel').value,
     mode: S.mode, rotation: S.rotation, mic: $('micOn').checked,
-    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, layout: S.layout, splitSide: S.splitSide,
+    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, layout: S.layout, splitSide: S.splitSide, splitRatio: S.splitRatio, camSource: S.camSource, usbDevice: S.usb.deviceId,
   } }).catch(() => {});
 }
 
@@ -650,11 +810,37 @@ function showCalibration() {
   }
 }
 
+let flashDetect = null;
+function startLocalFlashDetect() {
+  const v = $('preview');
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 24;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  const run = { base: null, last: 0, on: true };
+  flashDetect = run;
+  const step = (now, meta) => {
+    if (!run.on) return;
+    ctx.drawImage(v, 0, 0, 24, 24);
+    const d = ctx.getImageData(0, 0, 24, 24).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const luma = sum / 576;
+    // Prefer the camera's own capture time when the browser reports it.
+    const t = meta && meta.captureTime ? performance.timeOrigin + meta.captureTime : clockNow();
+    if (run.base == null) run.base = luma;
+    if (luma - run.base > 22 && t - run.last > 400 && S.calEdges) { run.last = t; S.calEdges.push(t); }
+    run.base += (luma - run.base) * (luma > run.base ? 0.02 : 0.2);
+    v.requestVideoFrameCallback(step);
+  };
+  v.requestVideoFrameCallback(step);
+}
+function stopLocalFlashDetect() { if (flashDetect) flashDetect.on = false; flashDetect = null; }
+
 async function runCalibration() {
   $('calStart').disabled = true;
   try {
     S.calEdges = [];
-    send({ type: 'cal.start' });
+    if (S.camSource === 'usb') startLocalFlashDetect(); else send({ type: 'cal.start' });
     await sleep(900); // let the phone settle its brightness baseline
     const flashes = [];
     const audioLat = [];
@@ -668,7 +854,7 @@ async function runCalibration() {
       if (click) { const l = await click; if (l != null) audioLat.push(l); }
     }
     await sleep(700);
-    send({ type: 'cal.stop' });
+    stopLocalFlashDetect(); send({ type: 'cal.stop' });
     const lat = [];
     for (const f of flashes) {
       const e = S.calEdges.find((t) => t > f + 5 && t < f + 700);
@@ -687,7 +873,7 @@ async function runCalibration() {
     toast('Sync calibrated', 'ok');
   } catch (e) {
     S.calEdges = null;
-    send({ type: 'cal.stop' });
+    stopLocalFlashDetect(); send({ type: 'cal.stop' });
     $('calText').textContent = e.message;
   }
   $('flash').classList.remove('on');
@@ -728,6 +914,9 @@ async function init() {
   if (p.pipSize) S.pipSize = p.pipSize;
   if (p.layout === 'pip' || p.layout === 'split') S.layout = p.layout;
   if (p.splitSide) S.splitSide = p.splitSide;
+  if (Number(p.splitRatio)) S.splitRatio = Number(p.splitRatio);
+  if (p.pipSize != null) S.pipSize = p.pipSize;
+  if (p.usbDevice) S.usb.deviceId = p.usbDevice;
   if (p.pipCorner) S.pipCorner = p.pipCorner;
   S.screenSource = p.screenSource || null;
   $('micOn').checked = !!p.mic;
@@ -736,6 +925,8 @@ async function init() {
   if (window.dlcNative && S.screenSource) sourceStillThere(S.screenSource).then((ok) => { if (!ok) S.screenSource = null; });
   navigator.mediaDevices.addEventListener('devicechange', () => { if (!engine.running) listDevices(); });
   connectWs();
+  await listUsb().catch(() => {});
+  if (p.camSource === 'usb') setCamSource('usb');
   initEditor();
 
   $('pairBtn').onclick = $('pairBtn2').onclick = openPair;
@@ -760,7 +951,26 @@ async function init() {
   $('focus').oninput = () => camSetSoon({ focusDistance: Number($('focus').value) });
   $('torchBtn').onclick = () => camSet({ torch: !(S.cam && S.cam.torch) });
   $('rotateBtn').onclick = () => { S.rotation = (S.rotation + 90) % 360; layoutPreview(); savePrefs(); };
-  segmented($('pipSizeStudio'), (v) => { S.pipSize = v; layoutPreview(); savePrefs(); });
+  const savePrefsSoon = debounce(savePrefs, 400);
+  $('camSizeStudio').oninput = () => {
+    const v = Number($('camSizeStudio').value);
+    if (S.layout === 'split') S.splitRatio = fromSlider('split', v); else S.pipSize = fromSlider('pip', v);
+    layoutPreview(); savePrefsSoon();
+  };
+  dragDivider($('divStudio'), () => {
+    const st = $('stage').getBoundingClientRect(), f = S.frame;
+    return f ? { left: st.left + f.cx, width: f.cw } : null;
+  }, () => S.splitSide === 'left', (r) => { S.splitRatio = r; layoutPreview(); }, savePrefs);
+  $('preview').addEventListener('wheel', (e) => {
+    if (!composite() || S.layout !== 'pip') return;
+    e.preventDefault();
+    S.pipSize = Math.min(0.6, Math.max(0.15, pipFraction(S.pipSize) - Math.sign(e.deltaY) * 0.02));
+    layoutPreview(); savePrefsSoon();
+  }, { passive: false });
+  segmented($('camSrcSeg'), (v) => setCamSource(v));
+  $('usbSel').onchange = () => { if (S.camSource === 'usb') startUsb(); };
+  $('usbQuick').onclick = () => setCamSource('usb');
+  navigator.mediaDevices.addEventListener('devicechange', () => listUsb().catch(() => {}));
   segmented($('pipCornerStudio'), (v) => { S.pipCorner = v; layoutPreview(); savePrefs(); });
   segmented($('layoutStudio'), (v) => { S.layout = v; layoutPreview(); savePrefs(); });
   $('swapStudio').onclick = () => { S.splitSide = S.splitSide === 'left' ? 'right' : 'left'; layoutPreview(); savePrefs(); };

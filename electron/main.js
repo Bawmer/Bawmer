@@ -58,6 +58,7 @@ async function createWindow() {
 
   if (process.platform === 'darwin') {
     systemPreferences.askForMediaAccess('microphone').catch(() => {});
+    systemPreferences.askForMediaAccess('camera').catch(() => {});
   }
 
   win = new BrowserWindow({

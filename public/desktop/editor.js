@@ -1,5 +1,5 @@
 // Session library and editor: preview, trim, sync adjustment and export.
-import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner } from './util.js';
+import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
 
 let E = null; // the open session: { id, project, peaks, edit, dur }
 let drag = null;
@@ -84,9 +84,14 @@ function renderEdit() {
   const p = $('player'), pr = E.project;
   p.dataset.aspect = e.aspect;
   p.dataset.layout = !pr.screen ? 'camera' : !pr.camera ? 'screen' : e.layout;
-  $('pipRow').hidden = p.dataset.layout !== 'pip';
-  $('swapSides').hidden = p.dataset.layout !== 'split';
-  setSeg($('pipSizeSeg'), e.pipSize || 'small');
+  const lay = p.dataset.layout;
+  $('camSizeRow').hidden = lay !== 'pip' && lay !== 'split';
+  $('cornerRow').hidden = lay !== 'pip';
+  $('swapSides').hidden = lay !== 'split';
+  $('divEditor').hidden = lay !== 'split';
+  const ratio = Number(e.splitRatio) || 1 / 3;
+  if (document.activeElement !== $('camSize')) $('camSize').value = lay === 'split' ? toSlider('split', ratio) : toSlider('pip', pipFraction(e.pipSize));
+  $('camSizeOut').textContent = lay === 'split' ? `${Math.round(ratio * 100)}% of the width` : `${Math.round(pipFraction(e.pipSize) * 100)}% of the height`;
   setSeg($('pipCornerSeg'), e.pipCorner || 'br');
   layoutCam();
 }
@@ -103,9 +108,11 @@ function layoutCam() {
     const b = pipBox(W, H, E.edit.pipSize, E.edit.pipCorner);
     place(wrap, { x: b.x, y: b.y, w: b.size, h: b.size });
   } else if (layout === 'split') {
-    const sb = splitBoxes(W, H, E.edit.splitSide);
+    const sb = splitBoxes(W, H, E.edit.splitSide, E.edit.splitRatio);
     place(scr, sb.scr);
     place(wrap, sb.cam);
+    if (sb.wide) Object.assign($('divEditor').style, { left: `${sb.camFirst ? sb.cam.w : sb.scr.w}px`, top: '0px', height: `${H}px` });
+    else $('divEditor').hidden = true;
   }
   placeVideo(v, { x: 0, y: 0, w: wrap.clientWidth, h: wrap.clientHeight }, E.edit.rotation);
 }
@@ -274,7 +281,12 @@ export function initEditor() {
   $('qualSel').onchange = () => setEdit({ quality: Number($('qualSel').value) });
   $('edFps').onchange = () => setEdit({ fps: Number($('edFps').value) });
   $('layoutSel').onchange = () => setEdit({ layout: $('layoutSel').value });
-  segmented($('pipSizeSeg'), (v) => setEdit({ pipSize: v }));
+  $('camSize').oninput = () => {
+    const v = Number($('camSize').value);
+    setEdit($('player').dataset.layout === 'split' ? { splitRatio: fromSlider('split', v) } : { pipSize: fromSlider('pip', v) });
+  };
+  dragDivider($('divEditor'), () => (E ? $('player').getBoundingClientRect() : null),
+    () => E.edit.splitSide === 'left', (r) => setEdit({ splitRatio: r }));
   $('swapSides').onclick = () => setEdit({ splitSide: E.edit.splitSide === 'left' ? 'right' : 'left' });
   segmented($('pipCornerSeg'), (v) => setEdit({ pipCorner: v }));
   dragToCorner(document.querySelector('.ed-cam-wrap'),

@@ -72,10 +72,12 @@ export function debounce(fn, ms) {
 const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
 const even = (n) => Math.round(n / 2) * 2;
 /** Side by side: complete DAW in one panel, camera in the other (server/exporter.js splitBoxes). */
-export function splitBoxes(w, h, side) {
+const clampN = (v, a, b) => Math.min(b, Math.max(a, v));
+export function splitBoxes(w, h, side, ratio) {
   const camFirst = side === 'left';
   if (w > h) {
-    const cw = even(w / 3), sw = w - cw;
+    const r = clampN(Number(ratio) || 1 / 3, 0.2, 0.5); // camera's share of the width
+    const cw = even(w * r), sw = w - cw;
     return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
   }
   const sh = Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
@@ -93,7 +95,8 @@ export function placeVideo(el, box, rotation, offsetX = 0, offsetY = 0) {
 }
 
 export function pipBox(w, h, size, corner) {
-  const s = even(Math.min(w, h) * (PIP_SIZES[size] || PIP_SIZES.small));
+  const f = typeof size === 'number' ? clampN(size, 0.15, 0.6) : PIP_SIZES[size] || PIP_SIZES.small;
+  const s = even(Math.min(w, h) * f);
   const m = even(Math.min(w, h) * 0.03);
   const c = ['tl', 'tr', 'bl', 'br'].includes(corner) ? corner : 'br';
   return { size: s, x: c[1] === 'l' ? m : w - s - m, y: c[0] === 't' ? m : h - s - m };
@@ -128,4 +131,29 @@ export function dragToCorner(el, getArea, onCorner) {
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
+}
+
+// One "camera size" slider (0–100) drives whichever layout is active.
+export const SIZE = {
+  split: { min: 0.2, max: 0.5 }, // camera's share of the width
+  pip: { min: 0.15, max: 0.6 }, // box side as a share of the frame height
+};
+export const pipFraction = (size) => (typeof size === 'number' ? size : PIP_SIZES[size] || PIP_SIZES.small);
+export const toSlider = (layout, value) => Math.round(((value - SIZE[layout].min) / (SIZE[layout].max - SIZE[layout].min)) * 100);
+export const fromSlider = (layout, v) => SIZE[layout].min + (SIZE[layout].max - SIZE[layout].min) * (v / 100);
+
+/** Drag a divider along x; reports the camera's share of the frame width. */
+export function dragDivider(handle, getFrame, isCamFirst, onRatio, onEnd) {
+  let on = false;
+  handle.addEventListener('pointerdown', (e) => { on = true; handle.setPointerCapture(e.pointerId); e.preventDefault(); });
+  handle.addEventListener('pointermove', (e) => {
+    if (!on) return;
+    const f = getFrame();
+    if (!f) return;
+    const x = (e.clientX - f.left) / f.width;
+    onRatio(clampN(isCamFirst() ? x : 1 - x, 0.2, 0.5));
+  });
+  const end = () => { if (on) { on = false; if (onEnd) onEnd(); } };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
 }

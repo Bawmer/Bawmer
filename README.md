@@ -19,7 +19,9 @@ npm run serve      # same engine without Electron; open the printed URL in Chrom
 npm run dist       # build installers (electron-builder)
 ```
 
-1. Click **Connect phone** and scan the QR code with the phone (same Wi-Fi).
+1. **Camera:** choose **Phone (Wi-Fi)** or **USB camera** in the Camera card.
+   For a USB webcam just pick it from the list — nothing else to set up.
+   For the phone, click **Connect phone** and scan the QR code (same Wi-Fi).
    The phone page uses a private self-signed certificate, so accept the browser
    warning once, then tap **Start camera**. Add it to the home screen to launch
    it like an app; it reconnects by itself afterwards.
@@ -27,7 +29,8 @@ npm run dist       # build installers (electron-builder)
 3. Leave **Capture the DAW screen** ticked (Studio Session). In the Windows app a
    picker opens: choose your **DAW window** (or a whole screen). The preview then
    shows the final picture as two screens side by side: your complete DAW and
-   you talking. Use *Swap DAW and camera* to change sides, or switch *Picture* to
+   you talking. Drag the line between them (or use *Camera size*) to resize,
+   use *Swap DAW and camera* to change sides, or switch *Picture* to
    *Square box* for a small square camera over the full DAW (S / M / L, drag to
    any corner).
 4. Press **Record**. Pause/resume as needed, press again to stop.
@@ -37,7 +40,7 @@ npm run dist       # build installers (electron-builder)
 
 | Area | Details |
 | --- | --- |
-| Camera | Front/rear, 720p / 1080p / 4K, 24 / 30 / 60 fps, zoom, exposure, manual focus, tap-to-focus, light, rotation — all remote-controlled from the desktop where the phone browser exposes them. Battery, link latency and format are shown live. Screen stays awake. |
+| Camera | Phone over Wi-Fi or a USB webcam on the computer (recorded locally, same clock as the audio). Front/rear, 720p / 1080p / 4K, 24 / 30 / 60 fps, zoom, exposure, manual focus, tap-to-focus, light, rotation — all remote-controlled from the desktop where the phone browser exposes them. Battery, link latency and format are shown live. Screen stays awake. |
 | Video quality | The phone records the full-quality file itself and uploads it in ordered, acknowledged chunks. The WebRTC stream is only the low-latency preview, so Wi-Fi dips never degrade or lose footage. |
 | Audio | Stereo WAV, 24-bit PCM or 32-bit float, 44.1 / 48 / 96 kHz, RF64 beyond 4 GB. Optional microphone on its own track. No processing (echo cancel, AGC, noise suppression all off). |
 | Audio sources | Windows: system loopback (WASAPI) with one click. Any OS: virtual drivers (BlackHole, Loopback, VB-CABLE, VoiceMeeter) or an interface's loopback input. Works with Ableton Live, FL Studio, Logic Pro, Pro Tools, Cubase, Studio One, Reaper, Bitwig — anything that plays through an audio device. |

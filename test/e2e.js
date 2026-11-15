@@ -76,6 +76,16 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
       const sq = await desk.evaluate(() => { const r = document.getElementById('preview').getBoundingClientRect(); return r.width > 20 && Math.abs(r.width - r.height) < 1.5; });
       assert(sq, 'square box layout is still available');
       await desk.click('#layoutStudio [data-v="split"]');
+      // resize by dragging the divider between DAW and camera
+      const d = await desk.locator('#divStudio').boundingBox();
+      await desk.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
+      await desk.mouse.down();
+      await desk.mouse.move(d.x + d.width / 2 - 120, d.y + d.height / 2, { steps: 6 });
+      await desk.mouse.up();
+      const ratio2 = await desk.evaluate(() => document.getElementById('preview').getBoundingClientRect().width / document.getElementById('screenMain').getBoundingClientRect().width);
+      assert(ratio2 > 0.6, `dragging the divider makes the camera panel bigger (camera/DAW ${ratio2.toFixed(2)})`);
+      await desk.fill('#camSizeStudio', '44');
+      await desk.dispatchEvent('#camSizeStudio', 'input');
     }
     await desk.click('#recBtn');
     await desk.waitForSelector('#recBadge:not([hidden])');
@@ -131,6 +141,25 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     const expected = project.duration - (project.timing.pauses[0][1] - project.timing.pauses[0][0]);
     assert(Math.abs(+d[1] * 60 + +d[2] - expected) < 0.3, `export length excludes the pause (${d[2]} s ≈ ${expected.toFixed(2)} s)`);
     assert(/pcm_s24le/.test(probe(`exports/${exps.find((f) => f.endsWith('.wav'))}`)), 'WAV export keeps 24-bit PCM');
+
+    // ── USB camera instead of the phone ──
+    await desk.click('.tab[data-view="studio"]');
+    await desk.click('#camSrcSeg [data-v="usb"]');
+    await desk.waitForFunction(() => document.getElementById('chipCam').textContent.includes('USB camera live'), null, { timeout: 15000 });
+    await desk.waitForFunction(() => document.getElementById('preview').videoWidth > 0, null, { timeout: 10000 });
+    assert(await desk.evaluate(() => document.getElementById('preview').videoWidth > 0 && document.getElementById('statLink').textContent === 'USB'),
+      'USB camera is live in the studio preview');
+    await desk.click('#recBtn');
+    await desk.waitForSelector('#recBadge:not([hidden])');
+    await sleep(5000);
+    await desk.click('#recBtn');
+    await desk.waitForFunction((prev) => document.querySelector('#sessionList li.active') && document.querySelector('#sessionList li.active').dataset.id !== prev, id, { timeout: 60000 });
+    const id2 = await desk.evaluate(() => document.querySelector('#sessionList li.active').dataset.id);
+    const p2 = (await (await dctx.request.get(`${server.localUrl}api/sessions/${id2}`)).json()).project;
+    assert(!!p2.camera && /\.(mp4|webm)$/.test(p2.camera.file), `USB camera recording saved (${p2.camera && p2.camera.file})`);
+    const d2 = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe(`../${id2}/${p2.camera.file}`));
+    const s2 = d2 ? +d2[2] * 60 + +d2[3] : 0;
+    assert(Math.abs(s2 - p2.duration) < 1.5 && Math.abs(p2.sync.cameraOffsetSec) < 1, `USB camera video matches the audio (${s2.toFixed(1)} s vs ${p2.duration.toFixed(1)} s, offset ${p2.sync.cameraOffsetSec.toFixed(3)} s)`);
   } catch (e) {
     failed = true;
     console.error(e.message);
