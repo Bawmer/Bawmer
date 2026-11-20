@@ -96,9 +96,10 @@ function renderEdit() {
   $('edRegionBtn').textContent = validCrop(e.screenCrop) ? '▭ DAW part: chosen — change…' : '▭ Choose DAW part…';
   $('edRegionFull').disabled = !validCrop(e.screenCrop);
   $('divEditor').hidden = lay !== 'split';
-  const ratio = Number(e.splitRatio) || 1 / 3;
+  const tall = lay === 'split' && e.aspect !== '16:9';
+  const ratio = tall ? Number(e.tallRatio) || 0.5 : Number(e.splitRatio) || 1 / 3;
   if (document.activeElement !== $('camSize')) $('camSize').value = lay === 'split' ? toSlider('split', ratio) : toSlider('pip', pipFraction(e.pipSize));
-  $('camSizeOut').textContent = lay === 'split' ? `${Math.round(ratio * 100)}% of the width` : `${Math.round(pipFraction(e.pipSize) * 100)}% of the height`;
+  $('camSizeOut').textContent = lay === 'split' ? `${Math.round(ratio * 100)}% of the ${tall ? 'height' : 'width'}` : `${Math.round(pipFraction(e.pipSize) * 100)}% of the height`;
   setSeg($('pipCornerSeg'), e.pipCorner || 'br');
   layoutCam();
 }
@@ -117,15 +118,18 @@ function layoutCam() {
   const order = [0, 1].filter((i) => present[i]);
   const showCams = layout !== 'screen';
   const F = frameBoxes(W, H, { screen: layout !== 'camera' && !!pr.screen, layout, pipSize: E.edit.pipSize, pipCorner: E.edit.pipCorner,
-    splitSide: E.edit.splitSide, splitRatio: E.edit.splitRatio }, showCams ? order.length : 0);
+    splitSide: E.edit.splitSide, splitRatio: E.edit.splitRatio, tallRatio: E.edit.tallRatio }, showCams ? order.length : 0);
   if (F.scr && layout !== 'camera') placeScreen(scr, F.scr, E.edit.screenCrop);
   order.forEach((ci, k) => {
     if (!showCams) return;
     place(wraps[ci], F.cams[k]);
     placeVideo(vids[ci], { x: 0, y: 0, w: F.cams[k].w, h: F.cams[k].h }, ci === 0 ? E.edit.rotation : 0);
   });
-  if (layout === 'split' && F.scr && F.wide) Object.assign($('divEditor').style, { left: `${F.scr.x > 0 ? F.scr.x : F.scr.w}px`, top: '0px', height: `${H}px` });
-  else $('divEditor').hidden = true;
+  const div = $('divEditor');
+  div.classList.toggle('horiz', layout === 'split' && !!F.scr && !F.wide);
+  if (layout === 'split' && F.scr && F.wide) Object.assign(div.style, { left: `${F.scr.x > 0 ? F.scr.x : F.scr.w}px`, top: '0px', height: `${H}px`, width: '' });
+  else if (layout === 'split' && F.scr && showCams && order.length) Object.assign(div.style, { left: '0px', width: `${W}px`, top: `${F.scr.y > 0 ? F.scr.y : F.scr.h}px`, height: '' });
+  else div.hidden = true;
 }
 
 const saveEdit = debounce(() => { if (E) api(`/api/sessions/${E.id}`, 'PATCH', { edit: E.edit }).catch(() => {}); }, 400);
@@ -295,17 +299,21 @@ export function initEditor() {
   $('layoutSel').onchange = () => setEdit({ layout: $('layoutSel').value });
   $('camSize').oninput = () => {
     const v = Number($('camSize').value);
-    setEdit($('player').dataset.layout === 'split' ? { splitRatio: fromSlider('split', v) } : { pipSize: fromSlider('pip', v) });
+    const lay = $('player').dataset.layout;
+    setEdit(lay === 'split' ? (E.edit.aspect !== '16:9' ? { tallRatio: fromSlider('split', v) } : { splitRatio: fromSlider('split', v) }) : { pipSize: fromSlider('pip', v) });
   };
-  dragDivider($('divEditor'), () => (E ? $('player').getBoundingClientRect() : null),
-    () => E.edit.splitSide === 'left', (r) => setEdit({ splitRatio: r }));
+  dragDivider($('divEditor'), () => {
+    if (!E) return null;
+    const r = $('player').getBoundingClientRect();
+    return { left: r.left, width: r.width, top: r.top, height: r.height, vertical: E.edit.aspect !== '16:9' };
+  }, () => E.edit.splitSide === 'left', (r, vertical) => setEdit(vertical ? { tallRatio: r } : { splitRatio: r }));
   $('edRegionBtn').onclick = async () => {
     const v = $('edScreen');
     if (!E || !v.videoWidth) return;
     const [cw, ch] = E.edit.aspect === '9:16' ? [1080, 1920] : E.edit.aspect === '1:1' ? [1080, 1080] : [1920, 1080];
     const lay = $('player').dataset.layout;
     const n = lay === 'screen' ? 0 : [E.project.camera, E.project.camera2].filter(Boolean).length;
-    const F = frameBoxes(cw, ch, { screen: true, layout: lay, pipSize: E.edit.pipSize, pipCorner: E.edit.pipCorner, splitSide: E.edit.splitSide, splitRatio: E.edit.splitRatio }, n);
+    const F = frameBoxes(cw, ch, { screen: true, layout: lay, pipSize: E.edit.pipSize, pipCorner: E.edit.pipCorner, splitSide: E.edit.splitSide, splitRatio: E.edit.splitRatio, tallRatio: E.edit.tallRatio }, n);
     const result = await selectRegion({ source: () => ({ src: v, w: v.videoWidth, h: v.videoHeight }), aspect: F.scr.w / F.scr.h, initial: E.edit.screenCrop });
     if (result !== undefined) setEdit({ screenCrop: validCrop(result) });
   };

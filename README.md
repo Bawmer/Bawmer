@@ -59,6 +59,15 @@ The full screen is still recorded — change the part any time with
 *Choose DAW part…* in the studio or the editor, or go back to *Whole DAW*.
 The camera can take 20–80 % of the width (slider or drag the divider).
 
+## Mobile 9:16 split (Reels, TikTok, Shorts)
+
+Choose **Video format → Mobile 9:16**, or click **📱 Mobile 9:16 split · phone +
+DAW**: the recording becomes vertical (1080×1920) with the phone camera on top
+(2/3) and the DAW below. Drag the line between them (or use *Camera size*,
+20–80 % of the height) to resize, *Swap* to put the DAW on top, and *Choose DAW
+part…* to show only the timeline. The preview, the editor, the export and a
+live stream (set to vertical, *Same as the studio picture*) all use this picture.
+
 ## Live on Instagram or TikTok
 
 The **Live stream** card sends the same picture (DAW + you) with the DAW audio.

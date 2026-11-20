@@ -236,6 +236,34 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     assert(/Video: h264.*1920x1080/.test(probe(`../${id4}/exports/${exp4}`)), 'Instagram split exports as 1920×1080');
     if (shots) execFileSync(ffmpegPath(), ['-y', '-loglevel', 'error', '-ss', '2', '-i', path.join(dataDir, 'Sessions', id4, 'exports', exp4), '-frames:v', '1', path.join(shots, 'insta-export.png')]);
 
+    // ── Mobile 9:16 split: phone on top, DAW below ──
+    await desk.click('.tab[data-view="studio"]');
+    await desk.click('#mobileSplitBtn');
+    await desk.waitForSelector('.region-dlg[open]', { timeout: 10000 });
+    await desk.click('.region-dlg [data-act="full"]');
+    const mob = await desk.evaluate(() => {
+      const r = (id) => document.getElementById(id).getBoundingClientRect();
+      const cam = r('preview'), scr = r('screenMain');
+      return { above: cam.bottom <= scr.top + 2, sameW: Math.abs(cam.width - scr.width) < 2, tall: (cam.height + scr.height) / cam.width > 1.7,
+        share: cam.height / (cam.height + scr.height), horiz: document.getElementById('divStudio').classList.contains('horiz') };
+    });
+    assert(mob.above && mob.sameW && mob.tall && Math.abs(mob.share - 2 / 3) < 0.03 && mob.horiz,
+      `Mobile 9:16 preview: phone on top (${(mob.share * 100).toFixed(0)} %), DAW below, resizable top/bottom`);
+    if (shots) await desk.screenshot({ path: path.join(shots, 'mobile.png') });
+    await desk.click('#recBtn');
+    await desk.waitForSelector('#recBadge:not([hidden])');
+    await sleep(4000);
+    await desk.click('#recBtn');
+    await desk.waitForFunction((prev) => document.querySelector('#sessionList li.active') && document.querySelector('#sessionList li.active').dataset.id !== prev, id4, { timeout: 60000 });
+    const id5 = await desk.evaluate(() => document.querySelector('#sessionList li.active').dataset.id);
+    const p5 = (await (await dctx.request.get(`${server.localUrl}api/sessions/${id5}`)).json()).project;
+    assert(p5.edit.aspect === '9:16' && Math.abs(p5.edit.tallRatio - 2 / 3) < 0.01 && !p5.edit.screenCrop, 'session is set up as a 9:16 split');
+    await desk.click('#expMp4');
+    await desk.waitForFunction(() => document.querySelectorAll('#exportList li').length === 1, null, { timeout: 60000 });
+    const exp5 = fs.readdirSync(path.join(dataDir, 'Sessions', id5, 'exports')).find((f) => f.endsWith('.mp4'));
+    assert(/Video: h264.*1080x1920/.test(probe(`../${id5}/exports/${exp5}`)), 'Mobile split exports as 1080×1920 (9:16)');
+    if (shots) execFileSync(ffmpegPath(), ['-y', '-loglevel', 'error', '-ss', '2', '-i', path.join(dataDir, 'Sessions', id5, 'exports', exp5), '-frames:v', '1', path.join(shots, 'mobile-export.png')]);
+
     // ── Live stream to a local RTMP receiver (stands in for Instagram / TikTok), with both cameras ──
     const flv = path.join(dataDir, 'live-received.flv');
     const rtmpPort = 19350 + Math.floor(Math.random() * 400);

@@ -26,14 +26,17 @@ const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
 // tall/square canvases stack them, with a full-width 16:9 DAW panel.
 // Keep in sync with public/desktop/util.js (splitBoxes).
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-function splitBoxes(w, h, side, ratio) {
+function splitBoxes(w, h, side, ratio, tallRatio) {
   const camFirst = side === 'left';
   if (w > h) {
     const r = clamp(Number(ratio) || 1 / 3, 0.2, 0.8); // camera's share of the width
     const cw = even(w * r), sw = w - cw;
     return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
   }
-  const sh = Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
+  // Tall frame (9:16): camera above/below the DAW. With tallRatio the camera
+  // takes that share of the height; otherwise the DAW gets a full-width 16:9 band.
+  const tr = Number(tallRatio);
+  const sh = tr > 0 ? h - even(h * clamp(tr, 0.2, 0.8)) : Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
   return { scr: { x: 0, y: camFirst ? ch : 0, w, h: sh }, cam: { x: 0, y: camFirst ? 0 : sh, w, h: ch }, wide: false, camFirst };
 }
 
@@ -68,7 +71,7 @@ function frameBoxes(w, h, o, n) {
   if (!o.screen) return { scr: null, cams: n === 0 ? [] : n === 1 ? [full] : halves(full, w >= h) };
   if (n === 0) return { scr: full, cams: [] };
   if (o.layout === 'split') {
-    const sb = splitBoxes(w, h, o.splitSide, o.splitRatio);
+    const sb = splitBoxes(w, h, o.splitSide, o.splitRatio, o.tallRatio);
     return { scr: sb.scr, cams: n === 1 ? [sb.cam] : halves(sb.cam, !sb.wide), wide: sb.wide };
   }
   const corner = ['tl', 'tr', 'bl', 'br'].includes(o.pipCorner) ? o.pipCorner : 'br';
@@ -153,7 +156,7 @@ function buildMp4Args(project, dir, edit, outFile) {
   cams.forEach((c, i) => chains.push(onTimeline(c.idx, c.off, c.rate, c.pre, `cam${i}`)));
 
   // Black canvas, then the DAW screen, then each camera on top.
-  const L = frameBoxes(w, h, { screen: useScreen, layout, pipSize: e.pipSize, pipCorner: e.pipCorner, splitSide: e.splitSide, splitRatio: e.splitRatio }, cams.length);
+  const L = frameBoxes(w, h, { screen: useScreen, layout, pipSize: e.pipSize, pipCorner: e.pipCorner, splitSide: e.splitSide, splitRatio: e.splitRatio, tallRatio: e.tallRatio }, cams.length);
   chains.push(`color=c=black:s=${w}x${h}:r=${fps}:d=${f(total)}[base0]`);
   let base = 'base0', step = 0;
   const layer = (label, box) => {

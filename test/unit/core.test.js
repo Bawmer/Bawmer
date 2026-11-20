@@ -149,3 +149,17 @@ test('Instagram split: phone 2/3 on the left, cropped DAW timeline 1/3 on the ri
   assert.match(graph, /\[cam0\]scale=1280:1080:force_original_aspect_ratio=increase,crop=1280:1080/);
   assert.match(graph, /\[s\]overlay=1280:0/);
 });
+
+test('Mobile 9:16 split: phone on top, DAW below, adjustable', () => {
+  const sb = splitBoxes(1080, 1920, 'left', 1 / 3, 2 / 3);
+  assert.deepEqual(sb.cam, { x: 0, y: 0, w: 1080, h: 1280 });
+  assert.deepEqual(sb.scr, { x: 0, y: 1280, w: 1080, h: 640 });
+  assert.equal(splitBoxes(1080, 1920, 'left', 1 / 3, 0.95).cam.h, 1536); // max 80 %
+  assert.deepEqual(splitBoxes(1080, 1920, 'right').scr, { x: 0, y: 0, w: 1080, h: 608 }); // without a ratio: full-width 16:9 DAW band
+  const project = { audio: { file: 'a.wav' }, camera: { file: 'c.mp4' }, screen: { file: 's.webm' }, timing: {}, sync: {} };
+  const { args } = buildMp4Args(project, '/s', { trimStart: 0, trimEnd: 5, aspect: '9:16', quality: 1080, fps: 30, layout: 'split', splitSide: 'left', tallRatio: 2 / 3 }, '/o.mp4');
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.match(graph, /color=c=black:s=1080x1920/);
+  assert.match(graph, /\[cam0\]scale=1080:1280:force_original_aspect_ratio=increase,crop=1080:1280/);
+  assert.match(graph, /\[s\]overlay=0:1280/);
+});

@@ -73,14 +73,17 @@ const PIP_SIZES = { small: 0.28, medium: 0.36, large: 0.46 };
 const even = (n) => Math.round(n / 2) * 2;
 /** Side by side: complete DAW in one panel, camera in the other (server/exporter.js splitBoxes). */
 const clampN = (v, a, b) => Math.min(b, Math.max(a, v));
-export function splitBoxes(w, h, side, ratio) {
+export function splitBoxes(w, h, side, ratio, tallRatio) {
   const camFirst = side === 'left';
   if (w > h) {
     const r = clampN(Number(ratio) || 1 / 3, 0.2, 0.8); // camera's share of the width
     const cw = even(w * r), sw = w - cw;
     return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
   }
-  const sh = Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
+  // Tall frame (9:16): camera above/below the DAW. With tallRatio the camera
+  // takes that share of the height; otherwise the DAW gets a full-width 16:9 band.
+  const tr = Number(tallRatio);
+  const sh = tr > 0 ? h - even(h * clampN(tr, 0.2, 0.8)) : Math.min(even((w * 9) / 16), even(h / 2)), ch = h - sh;
   return { scr: { x: 0, y: camFirst ? ch : 0, w, h: sh }, cam: { x: 0, y: camFirst ? 0 : sh, w, h: ch }, wide: false, camFirst };
 }
 
@@ -150,8 +153,9 @@ export function dragDivider(handle, getFrame, isCamFirst, onRatio, onEnd) {
     if (!on) return;
     const f = getFrame();
     if (!f) return;
-    const x = (e.clientX - f.left) / f.width;
-    onRatio(clampN(isCamFirst() ? x : 1 - x, 0.2, 0.8));
+    // Wide frames split left/right; tall (9:16) frames split top/bottom.
+    const p = f.vertical ? (e.clientY - f.top) / f.height : (e.clientX - f.left) / f.width;
+    onRatio(clampN(isCamFirst() ? p : 1 - p, 0.2, 0.8), !!f.vertical);
   });
   const end = () => { if (on) { on = false; if (onEnd) onEnd(); } };
   handle.addEventListener('pointerup', end);
@@ -169,7 +173,7 @@ export function frameBoxes(w, h, o, n) {
   if (!o.screen) return { scr: null, cams: n === 0 ? [] : n === 1 ? [full] : halves(full, w >= h) };
   if (n === 0) return { scr: full, cams: [] };
   if (o.layout === 'split') {
-    const sb = splitBoxes(w, h, o.splitSide, o.splitRatio);
+    const sb = splitBoxes(w, h, o.splitSide, o.splitRatio, o.tallRatio);
     return { scr: sb.scr, cams: n === 1 ? [sb.cam] : halves(sb.cam, !sb.wide), wide: sb.wide, camFirst: sb.camFirst };
   }
   const corner = ['tl', 'tr', 'bl', 'br'].includes(o.pipCorner) ? o.pipCorner : 'br';

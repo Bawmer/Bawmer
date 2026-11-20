@@ -18,7 +18,7 @@ const MODES = {
 const engine = new AudioEngine();
 const S = {
   app: null, ws: null, phone: false, cam: null, pc: null, pendingIce: [],
-  mode: 'studio', rotation: 0, layout: 'pip', screenCrop: null, live: null, liveCfg: {}, splitSide: 'right', splitRatio: 1 / 3,
+  mode: 'studio', rotation: 0, layout: 'pip', screenCrop: null, format: '16:9', tallRatio: 2 / 3, live: null, liveCfg: {}, splitSide: 'right', splitRatio: 1 / 3,
   camSource: 'phone', usb: { stream: null, track: null, deviceId: null, height: 1080 }, usbRec: null, pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
   rec: null, // { id, pauses, pausedAt, cameraStartMs, cameraMarkers, screenStartMs, stopping }
   waiters: new Map(), calEdges: null, savedOnce: false,
@@ -334,6 +334,9 @@ function layoutPreview() {
   const oneCam = !two && S.camSource === 'both' && !!v2.srcObject && !v.srcObject; // only the USB camera so far
   const multi = comp || two;
   const split = comp && S.layout === 'split';
+  const tallFrame = S.format === '9:16';
+  setSeg($('formatStudio'), S.format);
+  $('mobileSplitBtn').hidden = !comp;
   v2.hidden = !(two || oneCam);
   stage.classList.toggle('composite', multi || oneCam);
   stage.classList.toggle('split', split || (!comp && (two || oneCam)));
@@ -347,22 +350,26 @@ function layoutPreview() {
   $('divStudio').hidden = !split;
   S.frame = null;
   if (comp && document.activeElement !== $('camSizeStudio')) {
-    $('camSizeStudio').value = split ? toSlider('split', S.splitRatio) : toSlider('pip', pipFraction(S.pipSize));
+    $('camSizeStudio').value = split ? toSlider('split', tallFrame ? S.tallRatio : S.splitRatio) : toSlider('pip', pipFraction(S.pipSize));
   }
-  $('camSizeOutStudio').textContent = split ? `${Math.round(S.splitRatio * 100)}% of the width` : `${Math.round(pipFraction(S.pipSize) * 100)}% of the height`;
+  $('camSizeOutStudio').textContent = split ? (tallFrame ? `${Math.round(S.tallRatio * 100)}% of the height` : `${Math.round(S.splitRatio * 100)}% of the width`)
+    : `${Math.round(pipFraction(S.pipSize) * 100)}% of the ${tallFrame ? 'width' : 'height'}`;
   $('swapStudio').hidden = !split;
   setSeg($('layoutStudio'), S.layout);
   setSeg($('pipCornerStudio'), S.pipCorner);
   if (multi || oneCam) {
-    // The 16:9 frame of the final video, exactly as it will be exported.
-    const cw = Math.min(sw, (sh * 16) / 9), ch = (cw * 9) / 16;
+    // The frame of the final video (16:9 or 9:16), exactly as it will be exported.
+    const ar = tallFrame ? 9 / 16 : 16 / 9;
+    const cw = Math.min(sw, sh * ar), ch = cw / ar;
     const cx = (sw - cw) / 2, cy = (sh - ch) / 2;
     S.frame = { cx, cy, cw, ch };
     const els = two ? [v, v2] : oneCam ? [v2] : [v];
-    const F = frameBoxes(cw, ch, { screen: comp, layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio }, els.length);
+    const F = frameBoxes(cw, ch, { screen: comp, layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, tallRatio: S.tallRatio }, els.length);
     if (F.scr) placeScreen(scr, F.scr, S.screenCrop, cx, cy);
     els.forEach((el, i) => placeVideo(el, F.cams[i], el === v ? S.rotation : 0, cx, cy));
-    if (split) Object.assign($('divStudio').style, { left: `${cx + (F.scr.x > 0 ? F.scr.x : F.scr.w)}px`, top: `${cy}px`, height: `${ch}px` });
+    $('divStudio').classList.toggle('horiz', split && !F.wide);
+    if (split && F.wide) Object.assign($('divStudio').style, { left: `${cx + (F.scr.x > 0 ? F.scr.x : F.scr.w)}px`, top: `${cy}px`, height: `${ch}px`, width: '' });
+    else if (split) Object.assign($('divStudio').style, { left: `${cx}px`, width: `${cw}px`, top: `${cy + (F.scr.y > 0 ? F.scr.y : F.scr.h)}px`, height: '' });
     $('rotOut').textContent = `${S.rotation}°`;
     $('guide').hidden = true;
     return;
@@ -373,7 +380,7 @@ function layoutPreview() {
   v.style.transform = `rotate(${S.rotation}deg)`;
   $('rotOut').textContent = `${S.rotation}°`;
   // Framing guide for vertical social formats.
-  const g = $('guide'), target = MODES[S.mode].guide;
+  const g = $('guide'), target = MODES[S.mode].guide || (S.format === '9:16' ? 9 / 16 : null);
   let vw = v.videoWidth, vh = v.videoHeight;
   if (rot) [vw, vh] = [vh, vw];
   if (!target || !vw || vw / vh <= target + 0.01) { g.hidden = true; return; }
@@ -738,7 +745,7 @@ async function stopRecording() {
     },
     camera: { width: c.width, height: c.height, fps: Math.round(c.fps || 30), rotation: S.rotation },
     camera2: S.camSource === 'both' && S.usb.track ? (({ width, height }) => ({ width, height }))(S.usb.track.getSettings()) : null,
-    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, screenCrop: S.screenCrop, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
+    preset: { aspect: S.format, tallRatio: S.format === '9:16' ? S.tallRatio : null, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, screenCrop: S.screenCrop, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
   });
   toast('Saving session…');
   try {
@@ -826,7 +833,7 @@ function liveLayout() {
   if (S.live && S.live.height > S.live.width && S.live.cfg.vert !== 'studio') {
     return { layout: 'split', splitSide: 'right', splitRatio: S.splitRatio, pipSize: S.pipSize, pipCorner: S.pipCorner, rotation: S.rotation, screenCrop: S.screenCrop };
   }
-  return { layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, rotation: S.rotation, screenCrop: S.screenCrop };
+  return { layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, tallRatio: S.format === '9:16' ? S.tallRatio : undefined, rotation: S.rotation, screenCrop: S.screenCrop };
 }
 function liveSources() {
   const screen = screenTrack() ? S.relay : null;
@@ -962,7 +969,8 @@ function loadLivePlatform(plat) {
 /** Shape (width/height) of the panel the DAW fills in the current 16:9 picture. */
 function dawPanelAspect() {
   const n = S.camSource === 'both' ? 2 : 1;
-  const F = frameBoxes(1920, 1080, { screen: true, layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio }, n);
+  const [W, H] = S.format === '9:16' ? [1080, 1920] : [1920, 1080];
+  const F = frameBoxes(W, H, { screen: true, layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, tallRatio: S.format === '9:16' ? S.tallRatio : undefined }, n);
   return F.scr.w / F.scr.h;
 }
 
@@ -981,6 +989,7 @@ async function chooseRegion() {
 
 /** Instagram 16:9: phone camera in the left 2/3, the DAW timeline in the right 1/3. */
 async function instagramSplit() {
+  S.format = '16:9';
   S.layout = 'split';
   S.splitSide = 'left';
   S.splitRatio = 2 / 3;
@@ -995,6 +1004,27 @@ async function instagramSplit() {
   layoutPreview();
   savePrefs();
   toast('Instagram 16:9: phone 2/3 + DAW 1/3. Now choose the timeline part.', 'ok');
+  if (S.relay && S.relay.live) await chooseRegion();
+}
+
+/** Mobile 9:16 recording: phone camera on top, the DAW (or a part of it) below. */
+async function mobileSplit() {
+  S.format = '9:16';
+  S.layout = 'split';
+  S.splitSide = 'left'; // camera first = on top
+  S.tallRatio = 2 / 3;
+  if (S.camSource === 'both') await setCamSource('phone');
+  if (!S.live) {
+    // A live stream from here uses the same vertical picture.
+    saveLiveCfg();
+    const plat = S.liveCfg.platform || 'instagram';
+    S.liveCfg[plat] = { ...(S.liveCfg[plat] || {}), format: '9:16', vert: 'studio' };
+    loadLivePlatform(plat);
+    saveLiveCfg();
+  }
+  layoutPreview();
+  savePrefs();
+  toast('Mobile 9:16: phone on top, DAW below. Drag the line to resize; choose the DAW part if you like.', 'ok');
   if (S.relay && S.relay.live) await chooseRegion();
 }
 
@@ -1043,7 +1073,7 @@ function savePrefs() {
   api('/api/settings', 'PUT', { prefs: {
     source: $('srcSel').value, sampleRate: $('rateSel').value, bitDepth: $('bitSel').value,
     mode: S.mode, rotation: S.rotation, mic: $('micOn').checked,
-    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, picture: S.layout, screenCrop: S.screenCrop, autoHide: $('autoHide').checked, splitSide: S.splitSide, splitRatio: S.splitRatio, camSource: S.camSource, usbDevice: S.usb.deviceId,
+    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, picture: S.layout, screenCrop: S.screenCrop, format: S.format, tallRatio: S.tallRatio, autoHide: $('autoHide').checked, splitSide: S.splitSide, splitRatio: S.splitRatio, camSource: S.camSource, usbDevice: S.usb.deviceId,
   } }).catch(() => {});
 }
 
@@ -1221,6 +1251,8 @@ async function init() {
   if (p.pipSize) S.pipSize = p.pipSize;
   if (p.picture === 'pip' || p.picture === 'split') S.layout = p.picture;
   S.screenCrop = validCrop(p.screenCrop);
+  if (p.format === '9:16' || p.format === '16:9') S.format = p.format;
+  if (Number(p.tallRatio)) S.tallRatio = Number(p.tallRatio);
   if (p.autoHide === false) $('autoHide').checked = false;
   if (p.splitSide) S.splitSide = p.splitSide;
   if (Number(p.splitRatio)) S.splitRatio = Number(p.splitRatio);
@@ -1263,13 +1295,16 @@ async function init() {
   const savePrefsSoon = debounce(savePrefs, 400);
   $('camSizeStudio').oninput = () => {
     const v = Number($('camSizeStudio').value);
-    if (S.layout === 'split') S.splitRatio = fromSlider('split', v); else S.pipSize = fromSlider('pip', v);
+    if (S.layout === 'split') { if (S.format === '9:16') S.tallRatio = fromSlider('split', v); else S.splitRatio = fromSlider('split', v); }
+    else S.pipSize = fromSlider('pip', v);
     layoutPreview(); savePrefsSoon();
   };
   dragDivider($('divStudio'), () => {
     const st = $('stage').getBoundingClientRect(), f = S.frame;
-    return f ? { left: st.left + f.cx, width: f.cw } : null;
-  }, () => S.splitSide === 'left', (r) => { S.splitRatio = r; layoutPreview(); }, savePrefs);
+    return f ? { left: st.left + f.cx, width: f.cw, top: st.top + f.cy, height: f.ch, vertical: S.format === '9:16' } : null;
+  }, () => S.splitSide === 'left', (r, vertical) => { if (vertical) S.tallRatio = r; else S.splitRatio = r; layoutPreview(); }, savePrefs);
+  segmented($('formatStudio'), (v) => { S.format = v; layoutPreview(); savePrefs(); });
+  $('mobileSplitBtn').onclick = () => mobileSplit();
   $('preview').addEventListener('wheel', (e) => {
     if (!composite() || S.layout !== 'pip') return;
     e.preventDefault();
