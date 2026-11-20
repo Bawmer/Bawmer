@@ -266,3 +266,14 @@ input[type=checkbox] { accent-color: var(--cyan); width: 14px; height: 14px; mar
 
 @media (max-width: 1180px) { .steps { display: none; } .studio { grid-template-columns: minmax(0, 1fr) 290px; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* DAW region picker */
+.region-stage { position: relative; margin: 14px auto 0; background: #000; border-radius: 8px; overflow: hidden; touch-action: none; user-select: none; }
+.region-stage canvas { display: block; }
+.region-sel { position: absolute; border: 2px solid var(--cyan); box-shadow: 0 0 0 9999px #0009, 0 0 18px #2ff3e088; cursor: move; border-radius: 3px; }
+.region-handle { position: absolute; right: -8px; bottom: -8px; width: 16px; height: 16px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); cursor: nwse-resize; }
+.preset-btn { border-color: #a66bff88; color: #e3d2ff; background: #a66bff18; font-weight: 600; }
+.preset-btn:hover:not(:disabled) { border-color: var(--violet); background: #a66bff28; }
+.region-row { display: flex; gap: 8px; }
+.region-row .btn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.region-row .btn:first-child { flex: 2.4; }

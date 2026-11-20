@@ -76,7 +76,7 @@ const clampN = (v, a, b) => Math.min(b, Math.max(a, v));
 export function splitBoxes(w, h, side, ratio) {
   const camFirst = side === 'left';
   if (w > h) {
-    const r = clampN(Number(ratio) || 1 / 3, 0.2, 0.5); // camera's share of the width
+    const r = clampN(Number(ratio) || 1 / 3, 0.2, 0.8); // camera's share of the width
     const cw = even(w * r), sw = w - cw;
     return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
   }
@@ -135,7 +135,7 @@ export function dragToCorner(el, getArea, onCorner) {
 
 // One "camera size" slider (0–100) drives whichever layout is active.
 export const SIZE = {
-  split: { min: 0.2, max: 0.5 }, // camera's share of the width
+  split: { min: 0.2, max: 0.8 }, // camera's share of the width
   pip: { min: 0.15, max: 0.6 }, // box side as a share of the frame height
 };
 export const pipFraction = (size) => (typeof size === 'number' ? size : PIP_SIZES[size] || PIP_SIZES.small);
@@ -151,7 +151,7 @@ export function dragDivider(handle, getFrame, isCamFirst, onRatio, onEnd) {
     const f = getFrame();
     if (!f) return;
     const x = (e.clientX - f.left) / f.width;
-    onRatio(clampN(isCamFirst() ? x : 1 - x, 0.2, 0.5));
+    onRatio(clampN(isCamFirst() ? x : 1 - x, 0.2, 0.8));
   });
   const end = () => { if (on) { on = false; if (onEnd) onEnd(); } };
   handle.addEventListener('pointerup', end);
@@ -176,4 +176,35 @@ export function frameBoxes(w, h, o, n) {
   const corners = [corner, corner[0] + (corner[1] === 'l' ? 'r' : 'l')];
   const cams = corners.slice(0, n).map((c) => { const b = pipBox(w, h, o.pipSize, c); return { x: b.x, y: b.y, w: b.size, h: b.size, outline: true }; });
   return { scr: full, cams };
+}
+
+/** A usable DAW region ({x, y, w, h} as fractions of the screen) or null for the whole screen. */
+export function validCrop(c) {
+  if (!c || typeof c !== 'object') return null;
+  const n = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+  const x = n(c.x), y = n(c.y), w = Math.min(n(c.w), 1 - x), h = Math.min(n(c.h), 1 - y);
+  if (w < 0.03 || h < 0.03 || (w > 0.999 && h > 0.999)) return null;
+  return { x, y, w, h };
+}
+
+/**
+ * Show a screen <video> in a box, cropped to a DAW region and fitted inside
+ * the box (never cut off): the element is sized for the whole picture and a
+ * clip-path leaves only the region visible.
+ */
+export function placeScreen(el, box, crop, offX = 0, offY = 0) {
+  const c = validCrop(crop);
+  const vw = el.videoWidth, vh = el.videoHeight;
+  if (!c || !vw || !vh) {
+    Object.assign(el.style, { left: `${offX + box.x}px`, top: `${offY + box.y}px`, width: `${box.w}px`, height: `${box.h}px`, objectFit: 'contain', clipPath: '' });
+    return;
+  }
+  const rw = c.w * vw, rh = c.h * vh;
+  const s = Math.min(box.w / rw, box.h / rh);
+  const ew = vw * s, eh = vh * s;
+  const rx = offX + box.x + (box.w - rw * s) / 2, ry = offY + box.y + (box.h - rh * s) / 2;
+  Object.assign(el.style, {
+    left: `${rx - c.x * ew}px`, top: `${ry - c.y * eh}px`, width: `${ew}px`, height: `${eh}px`, objectFit: 'fill',
+    clipPath: `inset(${c.y * eh}px ${(1 - c.x - c.w) * ew}px ${(1 - c.y - c.h) * eh}px ${c.x * ew}px)`,
+  });
 }

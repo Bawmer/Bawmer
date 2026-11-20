@@ -48,6 +48,17 @@ npm run dist       # build installers (electron-builder)
    button on the floating bar; recording and stream keep running without a gap.
 5. The session opens in **Sessions**: preview, trim, fine-tune sync, export.
 
+## Instagram 16:9 split: phone 2/3 + DAW timeline 1/3
+
+Click **⧉ Instagram 16:9 · phone 2/3 + DAW timeline** (Camera card, once the
+DAW screen is captured). It sets side by side with the phone camera in the
+left 2/3, switches the live stream to Instagram 16:9, and opens the **DAW part**
+picker: drag the frame over your timeline (drag the corner dot to resize).
+The frame has the shape of the DAW panel, so the timeline fills it exactly.
+The full screen is still recorded — change the part any time with
+*Choose DAW part…* in the studio or the editor, or go back to *Whole DAW*.
+The camera can take 20–80 % of the width (slider or drag the divider).
+
 ## Live on Instagram or TikTok
 
 The **Live stream** card sends the same picture (DAW + you) with the DAW audio.

@@ -1,7 +1,7 @@
 // Builds the live picture (DAW screen + camera, same layout as the export)
 // into one video track. Frames are pulled straight from the tracks and
 // pushed by a timer, so it keeps running while the dashboard is minimised.
-import { frameBoxes } from './util.js';
+import { frameBoxes, validCrop } from './util.js';
 
 const hasProcessor = typeof MediaStreamTrackProcessor !== 'undefined';
 const hasGenerator = typeof MediaStreamTrackGenerator !== 'undefined';
@@ -45,10 +45,14 @@ class FrameSource {
   }
 }
 
-function contain(ctx, img, box) {
-  const s = Math.min(box.w / img.w, box.h / img.h);
-  const w = img.w * s, h = img.h * s;
-  ctx.drawImage(img.src, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2, w, h);
+/** Fit a picture (or the region { x, y, w, h } of it, as fractions) inside a box. */
+function contain(ctx, img, box, crop) {
+  const c = validCrop(crop);
+  const sx = c ? c.x * img.w : 0, sy = c ? c.y * img.h : 0;
+  const sw = c ? c.w * img.w : img.w, sh = c ? c.h * img.h : img.h;
+  const s = Math.min(box.w / sw, box.h / sh);
+  const w = sw * s, h = sh * s;
+  ctx.drawImage(img.src, sx, sy, sw, sh, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2, w, h);
 }
 
 function cover(ctx, img, box, rotation) {
@@ -133,7 +137,7 @@ export class Compositor {
     const scr = this.screen && this.screen.image;
     const cams = this.cameras.map((c, i) => (c && c.image ? { img: c.image, rot: i === 0 ? L.rotation : 0 } : null)).filter(Boolean);
     const F = frameBoxes(W, H, { ...L, screen: !!scr }, cams.length);
-    if (F.scr) contain(ctx, scr, F.scr);
+    if (F.scr) contain(ctx, scr, F.scr, L.screenCrop);
     F.cams.forEach((box, i) => {
       if (box.outline) {
         const o = Math.max(2, Math.round(box.w * 0.01));

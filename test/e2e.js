@@ -201,6 +201,41 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     assert(/Video: h264/.test(probe(`../${id3}/exports/${exp3}`)), 'two-camera MP4 export works');
     if (shots) execFileSync(ffmpegPath(), ['-y', '-loglevel', 'error', '-ss', '2', '-i', path.join(dataDir, 'Sessions', id3, 'exports', exp3), '-frames:v', '1', path.join(shots, 'both-export.png')]);
 
+    // ── Instagram 16:9 split: phone 2/3 + DAW timeline 1/3 ──
+    await desk.click('.tab[data-view="studio"]');
+    await desk.click('#igSplitBtn');
+    await desk.waitForSelector('.region-dlg[open]', { timeout: 10000 });
+    const sel = await desk.locator('.region-sel').boundingBox();
+    await desk.mouse.move(sel.x + sel.width / 2, sel.y + sel.height / 2);
+    await desk.mouse.down();
+    await desk.mouse.move(sel.x + sel.width / 2 + 80, sel.y + sel.height / 2 - 40, { steps: 5 });
+    await desk.mouse.up();
+    await desk.click('.region-dlg [data-act="ok"]');
+    const ig = await desk.evaluate(() => {
+      const r = (id) => document.getElementById(id).getBoundingClientRect();
+      const cam = r('preview');
+      const s = document.getElementById('screenMain');
+      return { camLeft: cam.left, camW: cam.width, frameW: document.getElementById('stage').getBoundingClientRect().width,
+        clipped: !!s.style.clipPath, fmt: document.getElementById('liveFormat').value, plat: document.querySelector('#livePlat .active').dataset.v };
+    });
+    assert(ig.clipped && ig.fmt === '16:9' && ig.plat === 'instagram' && Math.abs(ig.camW / ig.frameW - 2 / 3) < 0.03,
+      `Instagram split: phone 2/3 (${(ig.camW / ig.frameW * 100).toFixed(0)} %), DAW part chosen, live set to Instagram 16:9`);
+    if (shots) await desk.screenshot({ path: path.join(shots, 'insta.png') });
+    await desk.click('#recBtn');
+    await desk.waitForSelector('#recBadge:not([hidden])');
+    await sleep(4000);
+    await desk.click('#recBtn');
+    await desk.waitForFunction((prev) => document.querySelector('#sessionList li.active') && document.querySelector('#sessionList li.active').dataset.id !== prev, id3, { timeout: 60000 });
+    const id4 = await desk.evaluate(() => document.querySelector('#sessionList li.active').dataset.id);
+    const p4 = (await (await dctx.request.get(`${server.localUrl}api/sessions/${id4}`)).json()).project;
+    assert(p4.edit.layout === 'split' && p4.edit.splitSide === 'left' && Math.abs(p4.edit.splitRatio - 2 / 3) < 0.01 && p4.edit.screenCrop,
+      'session keeps the Instagram split and the chosen DAW part');
+    await desk.click('#expMp4');
+    await desk.waitForFunction(() => document.querySelectorAll('#exportList li').length === 1, null, { timeout: 60000 });
+    const exp4 = fs.readdirSync(path.join(dataDir, 'Sessions', id4, 'exports')).find((f) => f.endsWith('.mp4'));
+    assert(/Video: h264.*1920x1080/.test(probe(`../${id4}/exports/${exp4}`)), 'Instagram split exports as 1920×1080');
+    if (shots) execFileSync(ffmpegPath(), ['-y', '-loglevel', 'error', '-ss', '2', '-i', path.join(dataDir, 'Sessions', id4, 'exports', exp4), '-frames:v', '1', path.join(shots, 'insta-export.png')]);
+
     // ── Live stream to a local RTMP receiver (stands in for Instagram / TikTok), with both cameras ──
     const flv = path.join(dataDir, 'live-received.flv');
     const rtmpPort = 19350 + Math.floor(Math.random() * 400);
@@ -216,6 +251,8 @@ const assert = (cond, msg) => { if (!cond) throw new Error(`ASSERT: ${msg}`); co
     await desk.dispatchEvent('#liveServer', 'input');
     await desk.click('#liveBtn');
     await desk.waitForFunction(() => document.getElementById('liveState').textContent.startsWith('LIVE'), null, { timeout: 20000 });
+    // wait until data is actually flowing to the receiver, then stream for a while
+    await desk.waitForFunction(() => /Sending [1-9]\d* kbps/.test(document.getElementById('liveInfo').textContent), null, { timeout: 20000 });
     await sleep(7000);
     if (shots) await desk.screenshot({ path: path.join(shots, 'live.png') });
     await desk.click('#liveBtn');

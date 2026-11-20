@@ -1,5 +1,6 @@
 // Session library and editor: preview, trim, sync adjustment and export.
-import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, frameBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
+import { selectRegion } from './region.js';
+import { $, toast, api, fmtTime, fmtBytes, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, frameBoxes, placeVideo, placeScreen, validCrop, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
 
 let E = null; // the open session: { id, project, peaks, edit, dur }
 let drag = null;
@@ -91,6 +92,9 @@ function renderEdit() {
   $('camSizeRow').hidden = lay !== 'pip' && lay !== 'split';
   $('cornerRow').hidden = lay !== 'pip';
   $('swapSides').hidden = lay !== 'split';
+  $('regionRow').hidden = lay === 'camera' || !E.project.screen;
+  $('edRegionBtn').textContent = validCrop(e.screenCrop) ? '▭ DAW part: chosen — change…' : '▭ Choose DAW part…';
+  $('edRegionFull').disabled = !validCrop(e.screenCrop);
   $('divEditor').hidden = lay !== 'split';
   const ratio = Number(e.splitRatio) || 1 / 3;
   if (document.activeElement !== $('camSize')) $('camSize').value = lay === 'split' ? toSlider('split', ratio) : toSlider('pip', pipFraction(e.pipSize));
@@ -106,7 +110,7 @@ function layoutCam() {
   const vids = [$('edCam'), $('edCam2')];
   const pr = E.project, layout = P.dataset.layout, W = P.clientWidth, H = P.clientHeight;
   const place = (el, b) => Object.assign(el.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
-  scr.style.left = scr.style.top = scr.style.width = scr.style.height = '';
+  scr.style.left = scr.style.top = scr.style.width = scr.style.height = scr.style.clipPath = scr.style.objectFit = '';
   for (const w of wraps) w.style.left = w.style.top = w.style.width = w.style.height = '';
   // Same boxes as the export, so what you see is what you get.
   const present = [!!pr.camera, !!pr.camera2];
@@ -114,7 +118,7 @@ function layoutCam() {
   const showCams = layout !== 'screen';
   const F = frameBoxes(W, H, { screen: layout !== 'camera' && !!pr.screen, layout, pipSize: E.edit.pipSize, pipCorner: E.edit.pipCorner,
     splitSide: E.edit.splitSide, splitRatio: E.edit.splitRatio }, showCams ? order.length : 0);
-  if (F.scr && layout !== 'camera') place(scr, F.scr);
+  if (F.scr && layout !== 'camera') placeScreen(scr, F.scr, E.edit.screenCrop);
   order.forEach((ci, k) => {
     if (!showCams) return;
     place(wraps[ci], F.cams[k]);
@@ -295,6 +299,18 @@ export function initEditor() {
   };
   dragDivider($('divEditor'), () => (E ? $('player').getBoundingClientRect() : null),
     () => E.edit.splitSide === 'left', (r) => setEdit({ splitRatio: r }));
+  $('edRegionBtn').onclick = async () => {
+    const v = $('edScreen');
+    if (!E || !v.videoWidth) return;
+    const [cw, ch] = E.edit.aspect === '9:16' ? [1080, 1920] : E.edit.aspect === '1:1' ? [1080, 1080] : [1920, 1080];
+    const lay = $('player').dataset.layout;
+    const n = lay === 'screen' ? 0 : [E.project.camera, E.project.camera2].filter(Boolean).length;
+    const F = frameBoxes(cw, ch, { screen: true, layout: lay, pipSize: E.edit.pipSize, pipCorner: E.edit.pipCorner, splitSide: E.edit.splitSide, splitRatio: E.edit.splitRatio }, n);
+    const result = await selectRegion({ source: () => ({ src: v, w: v.videoWidth, h: v.videoHeight }), aspect: F.scr.w / F.scr.h, initial: E.edit.screenCrop });
+    if (result !== undefined) setEdit({ screenCrop: validCrop(result) });
+  };
+  $('edRegionFull').onclick = () => setEdit({ screenCrop: null });
+  $('edScreen').addEventListener('loadedmetadata', layoutCam);
   $('swapSides').onclick = () => setEdit({ splitSide: E.edit.splitSide === 'left' ? 'right' : 'left' });
   segmented($('pipCornerSeg'), (v) => setEdit({ pipCorner: v }));
   dragToCorner(document.querySelector('.ed-cam-wrap'),

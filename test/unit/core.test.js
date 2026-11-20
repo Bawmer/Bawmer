@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { WavWriter, HEADER_BYTES } = require('../../server/wav');
 const { computeSync, keepSegments } = require('../../server/sync');
-const { buildMp4Args, canvasSize, pipBox, splitBoxes, frameBoxes } = require('../../server/exporter');
+const { buildMp4Args, canvasSize, pipBox, splitBoxes, frameBoxes, validCrop } = require('../../server/exporter');
 
 test('wav writer produces a valid 24-bit header and samples', () => {
   const file = path.join(os.tmpdir(), `dlc-${process.pid}.wav`);
@@ -90,7 +90,7 @@ test('side by side: complete DAW panel + camera panel, no overlap', () => {
 
 test('resizing: camera share and box size are adjustable and clamped', () => {
   assert.equal(splitBoxes(1920, 1080, 'right', 0.25).cam.w, 480);
-  assert.equal(splitBoxes(1920, 1080, 'right', 0.9).cam.w, 960); // max 50 %
+  assert.equal(splitBoxes(1920, 1080, 'right', 0.9).cam.w, 1536); // max 80 %
   assert.equal(splitBoxes(1920, 1080, 'right', 0.05).cam.w, 384); // min 20 %
   assert.equal(pipBox(1920, 1080, 0.5, 'br').size, 540);
   assert.equal(pipBox(1920, 1080, 2, 'br').size, 648); // max 60 %
@@ -132,4 +132,20 @@ test('sync: USB camera next to the phone uses the computer clock', () => {
   const s = computeSync({ audioStartMs: 1000, cameraStartMs: 1300, camera2StartMs: 1100, calibration: { videoLatencyMs: 120, camera2LatencyMs: 60 } }, 48000);
   assert.ok(Math.abs(s.cameraOffsetSec - 0.18) < 1e-9);
   assert.ok(Math.abs(s.camera2OffsetSec - 0.04) < 1e-9);
+});
+
+test('Instagram split: phone 2/3 on the left, cropped DAW timeline 1/3 on the right', () => {
+  const sb = splitBoxes(1920, 1080, 'left', 2 / 3);
+  assert.deepEqual(sb.cam, { x: 0, y: 0, w: 1280, h: 1080 });
+  assert.deepEqual(sb.scr, { x: 1280, y: 0, w: 640, h: 1080 });
+  assert.equal(validCrop({ x: 0, y: 0, w: 1, h: 1 }), null); // whole screen
+  assert.equal(validCrop({ x: 0.5, y: 0.5, w: 0.01, h: 0.2 }), null); // too small
+  assert.deepEqual(validCrop({ x: 0.9, y: 0.1, w: 0.5, h: 0.3 }), { x: 0.9, y: 0.1, w: 0.09999999999999998, h: 0.3 });
+  const project = { audio: { file: 'a.wav' }, camera: { file: 'c.mp4' }, screen: { file: 's.webm' }, timing: {}, sync: {} };
+  const { args } = buildMp4Args(project, '/s', { trimStart: 0, trimEnd: 5, aspect: '16:9', quality: 1080, fps: 30, layout: 'split',
+    splitSide: 'left', splitRatio: 2 / 3, screenCrop: { x: 0.1, y: 0.4, w: 0.2, h: 0.5 } }, '/o.mp4');
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.match(graph, /\[scr\]crop=trunc\(iw\*0\.200000\/2\)\*2:trunc\(ih\*0\.500000\/2\)\*2:trunc\(iw\*0\.100000\):trunc\(ih\*0\.400000\),scale=640:1080/);
+  assert.match(graph, /\[cam0\]scale=1280:1080:force_original_aspect_ratio=increase,crop=1280:1080/);
+  assert.match(graph, /\[s\]overlay=1280:0/);
 });

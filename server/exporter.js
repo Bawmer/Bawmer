@@ -29,7 +29,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 function splitBoxes(w, h, side, ratio) {
   const camFirst = side === 'left';
   if (w > h) {
-    const r = clamp(Number(ratio) || 1 / 3, 0.2, 0.5); // camera's share of the width
+    const r = clamp(Number(ratio) || 1 / 3, 0.2, 0.8); // camera's share of the width
     const cw = even(w * r), sw = w - cw;
     return { scr: { x: camFirst ? cw : 0, y: 0, w: sw, h }, cam: { x: camFirst ? 0 : sw, y: 0, w: cw, h }, wide: true, camFirst };
   }
@@ -75,6 +75,25 @@ function frameBoxes(w, h, o, n) {
   const corners = [corner, corner[0] + (corner[1] === 'l' ? 'r' : 'l')]; // second camera: mirrored corner
   const cams = corners.slice(0, n).map((c) => { const b = pipBox(w, h, o.pipSize, c); return { x: b.x, y: b.y, w: b.size, h: b.size, outline: true }; });
   return { scr: full, cams };
+}
+
+/**
+ * Part of the DAW screen to show, as fractions of the full screen
+ * ({ x, y, w, h }), or null for the whole screen. The recording always keeps
+ * the full screen; the crop is applied here.
+ */
+function validCrop(c) {
+  if (!c || typeof c !== 'object') return null;
+  const n = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+  const x = n(c.x), y = n(c.y), w = Math.min(n(c.w), 1 - x), h = Math.min(n(c.h), 1 - y);
+  if (w < 0.03 || h < 0.03 || (w > 0.999 && h > 0.999)) return null;
+  return { x, y, w, h };
+}
+function cropFilter(c) {
+  const k = validCrop(c);
+  if (!k) return '';
+  const f6 = (v) => v.toFixed(6);
+  return `crop=trunc(iw*${f6(k.w)}/2)*2:trunc(ih*${f6(k.h)}/2)*2:trunc(iw*${f6(k.x)}):trunc(ih*${f6(k.y)}),`;
 }
 
 function rotateFilter(deg) {
@@ -142,7 +161,7 @@ function buildMp4Args(project, dir, edit, outFile) {
     chains.push(`[${base}][${label}]overlay=${box.x}:${box.y}[${next}]`);
     base = next;
   };
-  if (L.scr) { chains.push(`[scr]${fit(L.scr.w, L.scr.h)}[s]`); layer('s', L.scr); }
+  if (L.scr) { chains.push(`[scr]${cropFilter(e.screenCrop)}${fit(L.scr.w, L.scr.h)}[s]`); layer('s', L.scr); }
   L.cams.forEach((box, i) => {
     if (box.outline) {
       const b = Math.max(2, even(box.w * 0.01)); // thin outline so the box reads against a dark DAW
@@ -220,4 +239,4 @@ async function remux(src, dst, isMp4) {
   await runFfmpeg(args);
 }
 
-module.exports = { frameBoxes, pipBox, splitBoxes, buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };
+module.exports = { validCrop, frameBoxes, pipBox, splitBoxes, buildMp4Args, buildWavArgs, runFfmpeg, remux, canvasSize, ffmpegPath };

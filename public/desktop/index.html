@@ -118,6 +118,11 @@
         <label id="layoutRowStudio" hidden>Picture
           <div class="seg" id="layoutStudio"><button data-v="split">Side by side</button><button data-v="pip">Square box</button></div>
         </label>
+        <button class="btn preset-btn" id="igSplitBtn" hidden title="Phone camera in the left 2/3, a part of the DAW (your timeline) in the right 1/3, 16:9 for Instagram">⧉ Instagram 16:9 · phone 2/3 + DAW timeline</button>
+        <div class="region-row" id="regionRowStudio" hidden>
+          <button class="btn" id="regionBtn" title="Choose which part of the DAW is shown (e.g. the timeline)">▭ Choose DAW part…</button>
+          <button class="btn ghost" id="regionFull" title="Show the whole DAW again">Whole DAW</button>
+        </div>
         <button class="btn" id="swapStudio" hidden>⇄ Swap DAW and camera</button>
         <label id="camSizeRowStudio" hidden>Camera size <output id="camSizeOutStudio"></output>
           <input type="range" id="camSizeStudio" min="0" max="100" step="1" value="44">
@@ -273,6 +278,10 @@
                 <option value="screen">Screen only</option>
               </select>
             </label>
+            <div class="region-row" id="regionRow">
+              <button class="btn" id="edRegionBtn" title="Choose which part of the DAW is shown (e.g. the timeline)">▭ Choose DAW part…</button>
+              <button class="btn ghost" id="edRegionFull">Whole DAW</button>
+            </div>
             <button class="btn" id="swapSides">⇄ Swap DAW and camera</button>
             <label id="camSizeRow">Camera size <output id="camSizeOut"></output>
               <input type="range" id="camSize" min="0" max="100" step="1" value="44">

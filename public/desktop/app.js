@@ -1,4 +1,5 @@
-import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, frameBoxes, placeVideo, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
+import { $, toast, api, fmtClock, fmtBytes, dB, fitCanvas, segmented, setSeg, debounce, pipBox, splitBoxes, frameBoxes, placeVideo, placeScreen, validCrop, dragToCorner, pipFraction, toSlider, fromSlider, dragDivider } from './util.js';
+import { selectRegion } from './region.js';
 import { AudioEngine, clockNow } from './audio-engine.js';
 import { initEditor, openSession, refreshSessions, onExportMessage } from './editor.js';
 import { Compositor, ScreenRelay } from './compositor.js';
@@ -17,7 +18,7 @@ const MODES = {
 const engine = new AudioEngine();
 const S = {
   app: null, ws: null, phone: false, cam: null, pc: null, pendingIce: [],
-  mode: 'studio', rotation: 0, layout: 'pip', live: null, liveCfg: {}, splitSide: 'right', splitRatio: 1 / 3,
+  mode: 'studio', rotation: 0, layout: 'pip', screenCrop: null, live: null, liveCfg: {}, splitSide: 'right', splitRatio: 1 / 3,
   camSource: 'phone', usb: { stream: null, track: null, deviceId: null, height: 1080 }, usbRec: null, pipSize: 'small', pipCorner: 'br', screenSource: null, display: null, screenRec: null, calibration: null,
   rec: null, // { id, pauses, pausedAt, cameraStartMs, cameraMarkers, screenStartMs, stopping }
   waiters: new Map(), calEdges: null, savedOnce: false,
@@ -337,6 +338,10 @@ function layoutPreview() {
   stage.classList.toggle('composite', multi || oneCam);
   stage.classList.toggle('split', split || (!comp && (two || oneCam)));
   $('layoutRowStudio').hidden = !comp;
+  $('igSplitBtn').hidden = !comp;
+  $('regionRowStudio').hidden = !comp;
+  $('regionBtn').textContent = S.screenCrop ? '▭ DAW part: chosen — change…' : '▭ Choose DAW part…';
+  $('regionFull').disabled = !S.screenCrop;
   $('camSizeRowStudio').hidden = !comp;
   $('cornerRowStudio').hidden = !comp || split;
   $('divStudio').hidden = !split;
@@ -355,7 +360,7 @@ function layoutPreview() {
     S.frame = { cx, cy, cw, ch };
     const els = two ? [v, v2] : oneCam ? [v2] : [v];
     const F = frameBoxes(cw, ch, { screen: comp, layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio }, els.length);
-    if (F.scr) Object.assign(scr.style, { left: `${cx + F.scr.x}px`, top: `${cy + F.scr.y}px`, width: `${F.scr.w}px`, height: `${F.scr.h}px` });
+    if (F.scr) placeScreen(scr, F.scr, S.screenCrop, cx, cy);
     els.forEach((el, i) => placeVideo(el, F.cams[i], el === v ? S.rotation : 0, cx, cy));
     if (split) Object.assign($('divStudio').style, { left: `${cx + (F.scr.x > 0 ? F.scr.x : F.scr.w)}px`, top: `${cy}px`, height: `${ch}px` });
     $('rotOut').textContent = `${S.rotation}°`;
@@ -733,7 +738,7 @@ async function stopRecording() {
     },
     camera: { width: c.width, height: c.height, fps: Math.round(c.fps || 30), rotation: S.rotation },
     camera2: S.camSource === 'both' && S.usb.track ? (({ width, height }) => ({ width, height }))(S.usb.track.getSettings()) : null,
-    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
+    preset: { pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, screenCrop: S.screenCrop, ...(r.screenStartMs != null ? { layout: S.layout } : {}) },
   });
   toast('Saving session…');
   try {
@@ -819,9 +824,9 @@ function liveLayout() {
   // On a vertical stream the DAW goes across the top and you fill the rest,
   // unless the studio picture was chosen.
   if (S.live && S.live.height > S.live.width && S.live.cfg.vert !== 'studio') {
-    return { layout: 'split', splitSide: 'right', splitRatio: S.splitRatio, pipSize: S.pipSize, pipCorner: S.pipCorner, rotation: S.rotation };
+    return { layout: 'split', splitSide: 'right', splitRatio: S.splitRatio, pipSize: S.pipSize, pipCorner: S.pipCorner, rotation: S.rotation, screenCrop: S.screenCrop };
   }
-  return { layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, rotation: S.rotation };
+  return { layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio, rotation: S.rotation, screenCrop: S.screenCrop };
 }
 function liveSources() {
   const screen = screenTrack() ? S.relay : null;
@@ -953,6 +958,46 @@ function loadLivePlatform(plat) {
   renderLive();
 }
 
+// ───────────────────────────────────────────── DAW region & Instagram split preset
+/** Shape (width/height) of the panel the DAW fills in the current 16:9 picture. */
+function dawPanelAspect() {
+  const n = S.camSource === 'both' ? 2 : 1;
+  const F = frameBoxes(1920, 1080, { screen: true, layout: S.layout, pipSize: S.pipSize, pipCorner: S.pipCorner, splitSide: S.splitSide, splitRatio: S.splitRatio }, n);
+  return F.scr.w / F.scr.h;
+}
+
+async function chooseRegion() {
+  if (!S.relay || !S.relay.live) { toast('Connect DAW audio with “Capture the DAW screen” ticked first.', 'error'); return; }
+  const relay = S.relay;
+  const result = await selectRegion({
+    source: () => (relay.live ? { src: relay.canvas, w: relay.width, h: relay.height } : null),
+    aspect: dawPanelAspect(), initial: S.screenCrop,
+  });
+  if (result === undefined) return;
+  S.screenCrop = validCrop(result);
+  layoutPreview();
+  savePrefs();
+}
+
+/** Instagram 16:9: phone camera in the left 2/3, the DAW timeline in the right 1/3. */
+async function instagramSplit() {
+  S.layout = 'split';
+  S.splitSide = 'left';
+  S.splitRatio = 2 / 3;
+  if (S.camSource === 'both') await setCamSource('phone');
+  if (!S.live) {
+    saveLiveCfg();
+    S.liveCfg.platform = 'instagram';
+    S.liveCfg.instagram = { ...(S.liveCfg.instagram || {}), format: '16:9' };
+    loadLivePlatform('instagram');
+    saveLiveCfg();
+  }
+  layoutPreview();
+  savePrefs();
+  toast('Instagram 16:9: phone 2/3 + DAW 1/3. Now choose the timeline part.', 'ok');
+  if (S.relay && S.relay.live) await chooseRegion();
+}
+
 // ───────────────────────────────────────────── dashboard hiding & floating controls (desktop app)
 function syncBusy() {
   if (!window.dlcNative) return;
@@ -998,7 +1043,7 @@ function savePrefs() {
   api('/api/settings', 'PUT', { prefs: {
     source: $('srcSel').value, sampleRate: $('rateSel').value, bitDepth: $('bitSel').value,
     mode: S.mode, rotation: S.rotation, mic: $('micOn').checked,
-    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, picture: S.layout, autoHide: $('autoHide').checked, splitSide: S.splitSide, splitRatio: S.splitRatio, camSource: S.camSource, usbDevice: S.usb.deviceId,
+    pipSize: S.pipSize, pipCorner: S.pipCorner, screenSource: S.screenSource, picture: S.layout, screenCrop: S.screenCrop, autoHide: $('autoHide').checked, splitSide: S.splitSide, splitRatio: S.splitRatio, camSource: S.camSource, usbDevice: S.usb.deviceId,
   } }).catch(() => {});
 }
 
@@ -1175,6 +1220,7 @@ async function init() {
   S.rotation = Number(p.rotation) || 0;
   if (p.pipSize) S.pipSize = p.pipSize;
   if (p.picture === 'pip' || p.picture === 'split') S.layout = p.picture;
+  S.screenCrop = validCrop(p.screenCrop);
   if (p.autoHide === false) $('autoHide').checked = false;
   if (p.splitSide) S.splitSide = p.splitSide;
   if (Number(p.splitRatio)) S.splitRatio = Number(p.splitRatio);
@@ -1255,6 +1301,11 @@ async function init() {
   navigator.mediaDevices.addEventListener('devicechange', () => listUsb().catch(() => {}));
   segmented($('pipCornerStudio'), (v) => { S.pipCorner = v; layoutPreview(); savePrefs(); });
   segmented($('layoutStudio'), (v) => { S.layout = v; layoutPreview(); savePrefs(); });
+  $('igSplitBtn').onclick = () => instagramSplit();
+  $('regionBtn').onclick = () => chooseRegion();
+  $('regionFull').onclick = () => { S.screenCrop = null; layoutPreview(); savePrefs(); };
+  $('screenMain').addEventListener('loadedmetadata', layoutPreview);
+  $('screenMain').addEventListener('resize', layoutPreview);
   $('swapStudio').onclick = () => { S.splitSide = S.splitSide === 'left' ? 'right' : 'left'; layoutPreview(); savePrefs(); };
   dragToCorner($('preview'), () => (composite() && S.layout === 'pip' ? $('screenMain') : null), (c) => { S.pipCorner = c; layoutPreview(); savePrefs(); });
   $('screenOn').addEventListener('change', renderAudio);
