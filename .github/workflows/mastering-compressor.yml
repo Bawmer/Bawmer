@@ -1,0 +1,96 @@
+name: Lumen MC-64 (mastering compressor)
+
+on:
+  push:
+    paths: [ "mastering-compressor/**", ".github/workflows/mastering-compressor.yml" ]
+  pull_request:
+    paths: [ "mastering-compressor/**", ".github/workflows/mastering-compressor.yml" ]
+  workflow_dispatch:
+
+env:
+  # pinned for reproducible validation; v1.0.4 is the latest stable release with binaries
+  PLUGINVAL_VERSION: v1.0.4
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04, macos-14, windows-2022 ]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: mastering-compressor
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxext-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev libxcomposite-dev \
+            xvfb
+
+      - name: Configure
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "$RUNNER_OS" == "macOS" ]; then EXTRA="-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"; fi
+          cmake -B build -DCMAKE_BUILD_TYPE=Release $EXTRA
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: DSP tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Upload plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: LumenMC64-${{ runner.os }}
+          path: |
+            mastering-compressor/build/LumenMC64_artefacts/Release/VST3
+            mastering-compressor/build/LumenMC64_artefacts/Release/AU
+            mastering-compressor/build/LumenMC64_artefacts/Release/Standalone
+          if-no-files-found: warn
+
+      # Host-compatibility validation of the built VST3 (parameters, state save/restore, editor,
+      # bus layouts, sample rates/block sizes, fuzzed automation, threading). Strictness 10 is
+      # the most thorough level. Linux runs under a virtual X display so the editor tests run.
+      - name: pluginval (VST3)
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)   ASSET=pluginval_Linux.zip;   BIN=pv/pluginval ;;
+            Windows) ASSET=pluginval_Windows.zip; BIN=pv/pluginval.exe ;;
+            macOS)   ASSET=pluginval_macOS.zip;   BIN=pv/pluginval.app/Contents/MacOS/pluginval ;;
+          esac
+          curl -fsSL -o pluginval.zip \
+            "https://github.com/Tracktion/pluginval/releases/download/${PLUGINVAL_VERSION}/${ASSET}"
+          unzip -q -o pluginval.zip -d pv
+          chmod +x "$BIN" || true
+          PLUGIN="build/LumenMC64_artefacts/Release/VST3/Lumen MC-64.vst3"
+          ARGS=(--strictness-level 10 --validate-in-process --timeout-ms 600000
+                --output-dir pluginval-logs --validate "$PLUGIN")
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run -a "$BIN" "${ARGS[@]}"
+          else
+            "$BIN" "${ARGS[@]}"
+          fi
+
+      - name: auval (AU, macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/LumenMC64_artefacts/Release/AU/Lumen MC-64.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -strict -v aufx Lm64 Lmna
+
+      - name: Upload pluginval logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginval-logs-${{ runner.os }}
+          path: mastering-compressor/pluginval-logs
+          if-no-files-found: ignore
