@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <functional>
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace lumen
@@ -16,7 +18,9 @@ public:
     bool savePreset (const juce::String& name);   // user preset (overwrites same name)
     bool deletePreset (int index);                // user presets only
     bool isFactory (int index) const noexcept { return index >= 0 && index < getNumFactoryPresets(); }
-    int getCurrentIndex() const noexcept { return currentIndex; }
+    int getCurrentIndex() const noexcept { return currentIndex.load(); }
+    void setCurrentIndex (int index) noexcept; // e.g. restoring a session (does not load values)
+    std::function<void()> onBeginLoad, onEndLoad; // let the processor make a load one undo step
     juce::String getCurrentName() const;
     void refreshUserPresets();
 
@@ -34,6 +38,6 @@ private:
     juce::AudioProcessorValueTreeState& state;
     std::vector<FactoryPreset> factory;
     juce::Array<juce::File> userFiles;
-    int currentIndex = 0;
+    std::atomic<int> currentIndex { 0 };
 };
 } // namespace lumen

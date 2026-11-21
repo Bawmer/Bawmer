@@ -23,6 +23,7 @@ int main (int argc, char** argv)
     set (lumen::ids::hold, 12.0f);
     set (lumen::ids::detection, 3.0f);
     set (lumen::ids::analogModel, 2.0f);
+    proc.presets.loadPreset (9);
     set (lumen::ids::lookahead, 3.0f);
 
     const double fs = 48000.0;

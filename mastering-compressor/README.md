@@ -33,7 +33,8 @@ mastering-compressor/
 │   └── CompressorEngine.h    the complete engine (routing, link, M/S, mix, bypass, metering)
 ├── plugin/Source/            JUCE wrapper: parameters, processor, presets, UI
 ├── docs/                     engine development prompt + design/measurement notes
-├── tests/TestMain.cpp        automated DSP verification (43 tests)
+├── tests/TestMain.cpp        automated DSP verification (46 tests)
+├── tools/PluginTests.cpp     plugin-level tests: undo, presets, A/B, state, threading
 └── tools/UiSnapshot.cpp      dev tool: renders the UI to PNG while audio runs
 ```
 
@@ -111,8 +112,10 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 * **Lookahead**: audio is delayed by L samples. In *Exact* mode (the default) the reduction
   target goes through a sliding maximum and a nonnegative, normalised triangular kernel no longer
   than L+1. That provably guarantees full reduction when the transient reaches the output (zero
-  overshoot, tested in every mode). *Classic* mode only starts the attack earlier. Lookahead
-  changes crossfade over 20 ms.
+  overshoot, tested in every mode). It applies to feed-forward detection; in Hybrid with feedback
+  the digital path's guarantee is re-applied after blending, while pure Analog + Feedback can't
+  look ahead. *Classic* mode only starts the attack earlier. Lookahead changes crossfade over
+  20 ms; a change that arrives mid-fade waits for that fade to finish.
 * **Stereo link**: the per-channel reduction is blended toward the louder channel's reduction.
   At 100 % both channels get identical gain, so the image cannot move. Dual mono forces 0 %.
   In M/S mode the link couples Mid and Side.
@@ -141,6 +144,10 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 * **Loudness-matched bypass**: the K-weighted (BS.1770-style) loudness of input and output is
   tracked over about 3 s. While bypassed, the dry signal gets the difference (±24 dB max), so
   A/B comparisons aren't biased by level. The bypass is latency-aligned and crossfades over 20 ms.
+* **Bad input**: NaN/Inf samples on the main or sidechain input are treated as 0, and values are
+  clamped to ±1e6 (+120 dBFS), so one bad sample from upstream can't poison the filter and
+  envelope state. Normal samples pass unchanged (bit-exact). A safety net resets the engine and
+  outputs silence for a block if anything still goes non-finite.
 * **Denormals**: FTZ/DAZ for the duration of the callback. Recursive filter states are also
   flushed below 1e-30, which is about −600 dBFS and far beneath any audible or 24-bit content.
 * **Click-free automation**: threshold, ratio, knee, makeup, mix, link and blend use per-sample
@@ -184,12 +191,15 @@ aspect ratio, high-DPI). It has:
 * an auto-scaling GR history
 * a mode selector and a preset browser (15 factory presets, plus user presets saved as XML)
 * A/B slots with copy (saved in the session)
-* undo/redo (buttons or Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z)
+* undo/redo (buttons or Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z). It records only your own edits: a knob
+  drag, preset load or A/B switch is one step each, and host automation is never recorded
 * double-click on any knob to reset it
 
 ## Verification
 
-`tests/TestMain.cpp` runs 43 tests (about 10 s). All pass on GCC 13 / Linux, and they are also
+`tests/TestMain.cpp` runs 46 tests (about 10 s), and `tools/PluginTests.cpp` runs the plugin-level
+checks (undo, presets, A/B, state round trip, a concurrent state-save stress test). Both run
+under CTest and in CI. All pass on GCC 13 / Linux, and they are also
 clean under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 | Area | What is checked |

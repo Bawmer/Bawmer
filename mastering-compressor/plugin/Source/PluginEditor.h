@@ -53,6 +53,8 @@ public:
 
 private:
     void loadPresetList();
+    void loadPreset (int index);
+    void showCurrentPresetName();
     void showSaveDialog();
     void updateModeButtons();
     void updateEnablement();
@@ -79,7 +81,8 @@ private:
     GainReductionMeter grMeter;
     TransferCurveView curve;
     GainHistoryView history;
-    int historyReadIndex = 0;
+    uint32_t historyReadIndex = 0;
+    int shownPresetIndex = -1;
 
     // main controls
     Knob threshold, ratio, attack, release, hold, knee, lookahead, makeup, mix, link;
@@ -103,7 +106,6 @@ public:
     ~LumenAudioProcessorEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
-    void mouseDown (const juce::MouseEvent&) override;
     bool keyPressed (const juce::KeyPress&) override;
 
 private:

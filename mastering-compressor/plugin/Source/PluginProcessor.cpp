@@ -8,16 +8,112 @@ LumenAudioProcessor::LumenAudioProcessor()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                           .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)),
-      apvts (*this, &undoManager, "LumenMC64", createParameterLayout()),
+      apvts (*this, nullptr, "LumenMC64", createParameterLayout()), // no undo manager: see header
       presets (apvts),
       reader (apvts)
 {
     abSlots[0] = apvts.copyState();
     abSlots[1] = apvts.copyState();
+    for (auto* p : getParameters())
+        p->addListener (this);
+    presets.onBeginLoad = [this] { beginUndoBatch(); };
+    presets.onEndLoad = [this] { endUndoBatch(); };
+    undoBefore = captureParameters();
     startTimerHz (10);
 }
 
-LumenAudioProcessor::~LumenAudioProcessor() { stopTimer(); }
+LumenAudioProcessor::~LumenAudioProcessor()
+{
+    stopTimer();
+    for (auto* p : getParameters())
+        p->removeListener (this);
+}
+
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+bool isComparisonSwitch (const juce::String& id) { return id == ids::bypass || id == ids::matchBypass; }
+
+/** One undo step: the full parameter state before and after a GUI edit. */
+class ParameterSnapshotAction final : public juce::UndoableAction
+{
+public:
+    ParameterSnapshotAction (LumenAudioProcessor& p, LumenAudioProcessor::ParamSnapshot b,
+                             LumenAudioProcessor::ParamSnapshot a)
+        : proc (p), before (std::move (b)), after (std::move (a)) {}
+
+    bool perform() override { proc.applyParameters (after); return true; } // already applied: no-op
+    bool undo() override    { proc.applyParameters (before); return true; }
+    int getSizeInUnits() override { return static_cast<int> (before.size() + after.size()); }
+
+private:
+    LumenAudioProcessor& proc;
+    LumenAudioProcessor::ParamSnapshot before, after;
+};
+} // namespace
+
+LumenAudioProcessor::ParamSnapshot LumenAudioProcessor::captureParameters() const
+{
+    ParamSnapshot snap;
+    for (auto* p : getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+            if (! isComparisonSwitch (rp->getParameterID()))
+                snap.emplace_back (rp->getParameterID(), rp->convertFrom0to1 (rp->getValue()));
+    return snap;
+}
+
+void LumenAudioProcessor::applyParameters (const ParamSnapshot& snap)
+{
+    const juce::ScopedValueSetter<bool> svs (applyingSnapshot, true); // never record undo/redo itself
+    for (auto& [id, value] : snap)
+        if (auto* rp = apvts.getParameter (id))
+        {
+            const float norm = rp->convertTo0to1 (value);
+            if (juce::exactlyEqual (norm, rp->getValue()))
+                continue;
+            rp->beginChangeGesture();
+            rp->setValueNotifyingHost (norm);
+            rp->endChangeGesture();
+        }
+}
+
+void LumenAudioProcessor::parameterGestureChanged (int, bool gestureIsStarting)
+{
+    // gestures come from the GUI (message thread); ignore anything else defensively
+    if (applyingSnapshot || ! juce::MessageManager::getInstance()->isThisTheMessageThread())
+        return;
+    if (gestureIsStarting)
+    {
+        if (openGestures++ == 0 && batchDepth == 0)
+            undoBefore = captureParameters();
+    }
+    else if (openGestures > 0 && --openGestures == 0 && batchDepth == 0)
+    {
+        commitUndoStepIfChanged();
+    }
+}
+
+void LumenAudioProcessor::beginUndoBatch()
+{
+    if (batchDepth++ == 0 && openGestures == 0)
+        undoBefore = captureParameters();
+}
+
+void LumenAudioProcessor::endUndoBatch()
+{
+    if (batchDepth > 0 && --batchDepth == 0 && openGestures == 0)
+        commitUndoStepIfChanged();
+}
+
+void LumenAudioProcessor::commitUndoStepIfChanged()
+{
+    auto after = captureParameters();
+    if (after == undoBefore)
+        return;
+    undoManager.beginNewTransaction();
+    undoManager.perform (new ParameterSnapshotAction (*this, undoBefore, after));
+    undoBefore = std::move (after);
+}
 
 bool LumenAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
@@ -199,27 +295,47 @@ juce::AudioProcessorParameter* LumenAudioProcessor::getBypassParameter() const
     return apvts.getParameter (ids::bypass);
 }
 
+int LumenAudioProcessor::getActiveSlot() const
+{
+    const juce::ScopedLock sl (abLock);
+    return activeSlot;
+}
+
 void LumenAudioProcessor::switchToSlot (int slot)
 {
     slot = juce::jlimit (0, 1, slot);
-    if (slot == activeSlot)
-        return;
-    abSlots[activeSlot] = apvts.copyState();
-    activeSlot = slot;
-    // keep the comparison switches as they are; load everything else
-    auto target = abSlots[activeSlot].createCopy();
+    juce::ValueTree target;
+    {
+        const juce::ScopedLock sl (abLock);
+        if (slot == activeSlot)
+            return;
+        abSlots[activeSlot] = apvts.copyState();
+        activeSlot = slot;
+        target = abSlots[activeSlot].createCopy();
+    }
+    // apply outside the lock (parameter notifications), as one undoable step;
+    // the comparison switches (bypass / match) keep their current state
+    ParamSnapshot snap;
     for (auto child : target)
     {
         const auto id = child["id"].toString();
-        if (id.isEmpty() || id == ids::bypass || id == ids::matchBypass)
-            continue;
-        if (auto* p = apvts.getParameter (id))
-            p->setValueNotifyingHost (p->convertTo0to1 (static_cast<float> (child["value"])));
+        if (id.isNotEmpty() && ! isComparisonSwitch (id))
+            snap.emplace_back (id, static_cast<float> (child["value"]));
     }
+    beginUndoBatch();
+    for (auto& [id, value] : snap)
+        if (auto* p = apvts.getParameter (id))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 (value));
+            p->endChangeGesture();
+        }
+    endUndoBatch();
 }
 
 void LumenAudioProcessor::copyActiveToOther()
 {
+    const juce::ScopedLock sl (abLock);
     abSlots[activeSlot] = apvts.copyState();
     abSlots[1 - activeSlot] = abSlots[activeSlot].createCopy();
 }
@@ -227,15 +343,19 @@ void LumenAudioProcessor::copyActiveToOther()
 void LumenAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
-    abSlots[activeSlot] = state.createCopy();
     juce::ValueTree ab ("AB");
-    ab.setProperty ("active", activeSlot, nullptr);
     ab.setProperty ("preset", presets.getCurrentIndex(), nullptr);
-    for (int i = 0; i < 2; ++i)
     {
-        juce::ValueTree slot ("Slot");
-        slot.appendChild (abSlots[i].createCopy(), nullptr);
-        ab.appendChild (slot, nullptr);
+        // may run on a host thread while the editor switches A/B: read the slots under the lock,
+        // and store the live state as the active slot without mutating abSlots here
+        const juce::ScopedLock sl (abLock);
+        ab.setProperty ("active", activeSlot, nullptr);
+        for (int i = 0; i < 2; ++i)
+        {
+            juce::ValueTree slot ("Slot");
+            slot.appendChild (i == activeSlot ? state.createCopy() : abSlots[i].createCopy(), nullptr);
+            ab.appendChild (slot, nullptr);
+        }
     }
     juce::ValueTree root ("LumenMC64State");
     root.setProperty ("version", 1, nullptr);
@@ -258,20 +378,33 @@ void LumenAudioProcessor::setStateInformation (const void* data, int sizeInBytes
         apvts.replaceState (params);
 
     auto ab = root.getChildWithName ("AB");
-    if (ab.isValid() && ab.getNumChildren() == 2)
     {
-        activeSlot = juce::jlimit (0, 1, static_cast<int> (ab["active"]));
-        for (int i = 0; i < 2; ++i)
-            if (ab.getChild (i).getNumChildren() > 0)
-                abSlots[i] = ab.getChild (i).getChild (0).createCopy();
+        const juce::ScopedLock sl (abLock);
+        if (ab.isValid() && ab.getNumChildren() == 2)
+        {
+            activeSlot = juce::jlimit (0, 1, static_cast<int> (ab["active"]));
+            for (int i = 0; i < 2; ++i)
+                if (ab.getChild (i).getNumChildren() > 0)
+                    abSlots[i] = ab.getChild (i).getChild (0).createCopy();
+        }
+        else
+        {
+            abSlots[0] = apvts.copyState();
+            abSlots[1] = apvts.copyState();
+            activeSlot = 0;
+        }
     }
-    else
-    {
-        abSlots[0] = apvts.copyState();
-        abSlots[1] = apvts.copyState();
-        activeSlot = 0;
-    }
-    undoManager.clearUndoHistory();
+    if (ab.isValid() && ab.hasProperty ("preset"))
+        presets.setCurrentIndex (static_cast<int> (ab["preset"])); // name only; values came above
+
+    // undo history belongs to the previous state; the manager is only touched on the message thread
+    juce::MessageManager::callAsync ([safe = juce::WeakReference<LumenAudioProcessor> (this)] {
+        if (auto* self = safe.get())
+        {
+            self->undoManager.clearUndoHistory();
+            self->undoBefore = self->captureParameters();
+        }
+    });
 }
 
 juce::AudioProcessorEditor* LumenAudioProcessor::createEditor() { return new LumenAudioProcessorEditor (*this); }

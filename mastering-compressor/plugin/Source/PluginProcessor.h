@@ -25,21 +25,25 @@ struct MeterBus
 /** Single-producer / single-consumer ring of gain-reduction samples (one per ~10 ms). */
 struct GrHistory
 {
-    static constexpr int kSize = 4096;
+    static constexpr uint32_t kSize = 4096; // power of two: index & (kSize - 1)
     float gr[kSize] {};
     float level[kSize] {};
-    std::atomic<int> writeIndex { 0 };
+    // unsigned: wraps modulo 2^32 by definition, and since kSize divides 2^32 the masked slot
+    // stays continuous across the wrap; readers compare with unsigned differences
+    std::atomic<uint32_t> writeIndex { 0 };
 
     void push (float g, float l) noexcept
     {
-        const int w = writeIndex.load (std::memory_order_relaxed);
-        gr[w % kSize] = g;
-        level[w % kSize] = l;
+        const uint32_t w = writeIndex.load (std::memory_order_relaxed);
+        gr[w & (kSize - 1)] = g;
+        level[w & (kSize - 1)] = l;
         writeIndex.store (w + 1, std::memory_order_release);
     }
 };
 
-class LumenAudioProcessor final : public juce::AudioProcessor, private juce::Timer
+class LumenAudioProcessor final : public juce::AudioProcessor,
+                                  private juce::Timer,
+                                  private juce::AudioProcessorParameter::Listener
 {
 public:
     LumenAudioProcessor();
@@ -73,11 +77,21 @@ public:
     juce::AudioProcessorParameter* getBypassParameter() const override;
 
     // --- A/B comparison -----------------------------------------------------------------
-    int getActiveSlot() const noexcept { return activeSlot; }
+    int getActiveSlot() const;
     void switchToSlot (int slot);        // stores the current settings in the active slot first
     void copyActiveToOther();
 
+    // --- undo / redo: GUI edits only ---------------------------------------------------------
+    // The parameter tree has no undo manager, so host automation is never recorded. Undo steps
+    // are taken from parameter *gestures*, which only the plugin's own GUI and preset/A-B code
+    // produce (hosts automate via setValue, without gestures). Several changes inside one
+    // batch (preset load, A/B switch) become a single step.
     juce::UndoManager undoManager;
+    using ParamSnapshot = std::vector<std::pair<juce::String, float>>;
+    ParamSnapshot captureParameters() const;          // real-world values, excluding bypass/match
+    void applyParameters (const ParamSnapshot& snap); // as one notified gesture per changed param
+    void beginUndoBatch();                            // message thread
+    void endUndoBatch();
     juce::AudioProcessorValueTreeState apvts;
     PresetManager presets;
     MeterBus meters;
@@ -91,6 +105,9 @@ private:
     void processInternal (juce::AudioBuffer<SampleType>& buffer);
     void timerCallback() override;
     void publishMeters (int numSamples) noexcept;
+    void parameterValueChanged (int, float) override {}
+    void parameterGestureChanged (int, bool gestureIsStarting) override;
+    void commitUndoStepIfChanged();
 
     ParameterReader reader;
     CompressorEngine engine;
@@ -100,9 +117,15 @@ private:
     float historyMaxGr = 0.0f, historyMaxLevel = -120.0f;
     std::atomic<int> desiredLatency { 0 }, reportedLatency { 0 };
 
+    juce::CriticalSection abLock; // getStateInformation() may run on a host thread
     juce::ValueTree abSlots[2];
     int activeSlot = 0;
 
+    ParamSnapshot undoBefore;
+    int openGestures = 0, batchDepth = 0;
+    bool applyingSnapshot = false;
+
+    JUCE_DECLARE_WEAK_REFERENCEABLE (LumenAudioProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LumenAudioProcessor)
 };
 } // namespace lumen

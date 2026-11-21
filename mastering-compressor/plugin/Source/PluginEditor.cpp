@@ -122,23 +122,24 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
     addAndMakeVisible (presetBox);
     presetBox.setTextWhenNothingSelected ("Presets");
     presetBox.onChange = [this] {
+        // always (re)load, including the preset that is already current (discard changes)
         const int idx = presetBox.getSelectedItemIndex();
-        if (idx >= 0 && idx != proc.presets.getCurrentIndex())
-            proc.presets.loadPreset (idx);
+        if (idx >= 0)
+            loadPreset (idx);
     };
     loadPresetList();
 
     prevPreset.onClick = [this] {
         const int n = presetBox.getNumItems();
-        if (n > 0) presetBox.setSelectedItemIndex ((presetBox.getSelectedItemIndex() - 1 + n) % n);
+        if (n > 0) loadPreset ((proc.presets.getCurrentIndex() - 1 + n) % n);
     };
     nextPreset.onClick = [this] {
         const int n = presetBox.getNumItems();
-        if (n > 0) presetBox.setSelectedItemIndex ((presetBox.getSelectedItemIndex() + 1) % n);
+        if (n > 0) loadPreset ((proc.presets.getCurrentIndex() + 1) % n);
     };
     savePreset.onClick = [this] { showSaveDialog(); };
     deletePreset.onClick = [this] {
-        const int idx = presetBox.getSelectedItemIndex();
+        const int idx = proc.presets.getCurrentIndex();
         if (proc.presets.isFactory (idx))
             return;
         proc.presets.deletePreset (idx);
@@ -209,7 +210,27 @@ void MainPanel::loadPresetList()
             presetBox.addSeparator();
         presetBox.addItem ((i < numFactory ? "" : "* ") + names[i], i + 1);
     }
-    presetBox.setSelectedItemIndex (proc.presets.getCurrentIndex(), juce::dontSendNotification);
+    showCurrentPresetName();
+}
+
+void MainPanel::loadPreset (int index)
+{
+    proc.presets.loadPreset (index);
+    showCurrentPresetName();
+}
+
+/** Shows the current preset's name with *no* item selected: ComboBox only reports a change when
+    the selection changes, so leaving nothing selected lets the user pick the same preset again
+    to reload it. The trailing thin space keeps the text from matching (and so re-selecting)
+    the item in ComboBox::setText; it is invisible on screen. */
+void MainPanel::showCurrentPresetName()
+{
+    const int idx = proc.presets.getCurrentIndex();
+    const auto prefix = proc.presets.isFactory (idx) ? juce::String() : juce::String ("* ");
+    presetBox.setSelectedId (0, juce::dontSendNotification);
+    presetBox.setText (prefix + proc.presets.getCurrentName() + juce::String::charToString (0x2009),
+                       juce::dontSendNotification);
+    shownPresetIndex = idx;
 }
 
 void MainPanel::showSaveDialog()
@@ -231,6 +252,8 @@ void MainPanel::showSaveDialog()
 
 void MainPanel::updateModeButtons()
 {
+    if (proc.presets.getCurrentIndex() != shownPresetIndex) // e.g. a session was restored
+        showCurrentPresetName();
     const int mode = juce::roundToInt (state.getRawParameterValue (ids::mode)->load());
     for (int i = 0; i < 4; ++i)
         modeButtons[i].setToggleState (i == mode, juce::dontSendNotification);
@@ -290,12 +313,13 @@ void MainPanel::refresh()
     curve.setOperatingPoint (det, juce::jmax (grA, grB));
 
     // gain-reduction history
-    const int w = proc.history.writeIndex.load (std::memory_order_acquire);
+    // unsigned arithmetic: correct across the 2^32 wrap of the write index
+    const uint32_t w = proc.history.writeIndex.load (std::memory_order_acquire);
     if (w - historyReadIndex > GrHistory::kSize)
         historyReadIndex = w - GrHistory::kSize;
-    while (historyReadIndex < w)
+    while (historyReadIndex != w)
     {
-        const int i = historyReadIndex++ % GrHistory::kSize;
+        const uint32_t i = historyReadIndex++ & (GrHistory::kSize - 1);
         history.push (proc.history.gr[i], proc.history.level[i]);
     }
     history.repaint();
@@ -469,7 +493,6 @@ LumenAudioProcessorEditor::LumenAudioProcessorEditor (LumenAudioProcessor& p)
     setLookAndFeel (&lnf);
     panel.setLookAndFeel (&lnf);
     addAndMakeVisible (panel);
-    addMouseListener (this, true);
     setWantsKeyboardFocus (true);
 
     setResizable (true, true);
@@ -493,14 +516,10 @@ void LumenAudioProcessorEditor::resized()
 {
     const float scale = juce::jmin ((float) getWidth() / MainPanel::kWidth, (float) getHeight() / MainPanel::kHeight);
     panel.setTransform (juce::AffineTransform::scale (scale));
-    panel.setRenderScale (scale * (float) juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->scale);
+    // getPrimaryDisplay() may be null (headless hosts, display reconfiguration)
+    const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    panel.setRenderScale (scale * (display != nullptr ? (float) display->scale : 1.0f));
     panel.setBounds (0, 0, MainPanel::kWidth, MainPanel::kHeight);
-}
-
-void LumenAudioProcessorEditor::mouseDown (const juce::MouseEvent&)
-{
-    // each click-drag gesture becomes one undoable step
-    proc.undoManager.beginNewTransaction();
 }
 
 bool LumenAudioProcessorEditor::keyPressed (const juce::KeyPress& key)

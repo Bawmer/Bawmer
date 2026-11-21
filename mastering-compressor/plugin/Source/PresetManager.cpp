@@ -75,11 +75,19 @@ juce::StringArray PresetManager::getPresetNames() const
 juce::String PresetManager::getCurrentName() const
 {
     auto names = getPresetNames();
-    return juce::isPositiveAndBelow (currentIndex, names.size()) ? names[currentIndex] : juce::String();
+    const int idx = currentIndex.load();
+    return juce::isPositiveAndBelow (idx, names.size()) ? names[idx] : juce::String();
+}
+
+void PresetManager::setCurrentIndex (int index) noexcept
+{
+    const int n = getNumFactoryPresets() + userFiles.size();
+    currentIndex = juce::isPositiveAndBelow (index, n) ? index : 0;
 }
 
 void PresetManager::applyValues (const std::vector<std::pair<juce::String, float>>& values)
 {
+    if (onBeginLoad) onBeginLoad();
     for (auto* p : state.processor.getParameters())
     {
         auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p);
@@ -93,6 +101,7 @@ void PresetManager::applyValues (const std::vector<std::pair<juce::String, float
         rp->setValueNotifyingHost (norm);
         rp->endChangeGesture();
     }
+    if (onEndLoad) onEndLoad();
 }
 
 bool PresetManager::loadPreset (int index)

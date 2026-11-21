@@ -123,7 +123,9 @@ private:
 };
 
 /** Delay line whose delay can change while running: the old and new taps are crossfaded with an
-    equal-gain raised-cosine over fadeSamples, so lookahead / latency changes do not click. */
+    equal-gain raised-cosine over fadeSamples, so lookahead / latency changes do not click.
+    A change that arrives while a fade is running is deferred until that fade completes (only the
+    latest pending value is kept): restarting a fade from a single tap mid-blend would jump. */
 template <int MaxSamples>
 class CrossfadingDelay
 {
@@ -133,6 +135,7 @@ public:
         std::fill (std::begin (buffer), std::end (buffer), 0.0);
         writePos = 0;
         fadePos = fadeLength = 0;
+        hasPending = false;
     }
 
     void setFadeLength (int samples) noexcept { fadeSamples = std::max (1, samples); }
@@ -140,18 +143,22 @@ public:
     void setDelay (int samples, bool immediate = false) noexcept
     {
         samples = clampValue (samples, 0, MaxSamples - 1);
-        if (samples == delay && fadeLength == 0)
-            return;
         if (immediate)
         {
             delay = oldDelay = samples;
             fadeLength = fadePos = 0;
+            hasPending = false;
             return;
         }
-        oldDelay = currentReadDelay();
-        delay = samples;
-        fadeLength = fadeSamples;
-        fadePos = 0;
+        if (fadeLength > 0)
+        {
+            pendingDelay = samples;
+            hasPending = (samples != delay);
+            return;
+        }
+        if (samples == delay)
+            return;
+        startFade (samples);
     }
 
     int getDelay() const noexcept { return delay; }
@@ -166,7 +173,15 @@ public:
             const double w = 0.5 - 0.5 * std::cos (kPi * t); // 0 -> 1
             y = read (oldDelay) + w * (y - read (oldDelay));
             if (++fadePos >= fadeLength)
+            {
                 fadeLength = fadePos = 0;
+                if (hasPending)
+                {
+                    hasPending = false;
+                    if (pendingDelay != delay)
+                        startFade (pendingDelay);
+                }
+            }
         }
         writePos = (writePos + 1 == MaxSamples) ? 0 : writePos + 1;
         return y;
@@ -181,10 +196,18 @@ private:
         return buffer[static_cast<size_t> (p)];
     }
 
-    int currentReadDelay() const noexcept { return fadeLength > 0 && fadePos * 2 < fadeLength ? oldDelay : delay; }
+    void startFade (int newDelay) noexcept
+    {
+        oldDelay = delay; // no fade is running here, so the output is exactly the current tap
+        delay = newDelay;
+        fadeLength = fadeSamples;
+        fadePos = 0;
+    }
 
     double buffer[MaxSamples] {};
     int writePos = 0, delay = 0, oldDelay = 0, fadePos = 0, fadeLength = 0, fadeSamples = 960;
+    int pendingDelay = 0;
+    bool hasPending = false;
 };
 
 } // namespace lumen

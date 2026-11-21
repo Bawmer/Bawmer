@@ -287,10 +287,27 @@ public:
                     sc[c] = sidechain[c] + offset;
             }
             processChunk (chunk, numChannels, sc, scCh, n);
+
+            // Safety net: inputs are sanitised, so this should never trigger; if any state still
+            // went non-finite, recover instead of emitting NaN forever: reset and output silence.
+            bool finite = true;
+            for (int c = 0; c < numChannels; ++c)
+                for (int i = 0; i < n; ++i)
+                    finite = finite && std::isfinite (chunk[c][i]);
+            if (! finite)
+            {
+                reset();
+                for (int c = 0; c < numChannels; ++c)
+                    std::fill (chunk[c], chunk[c] + n, 0.0);
+                ++recoveries;
+            }
         }
     }
 
     const MeterSnapshot& getMeters() const noexcept { return meters; }
+
+    /** Number of times the non-finite safety net had to reset the engine (diagnostics). */
+    long long getRecoveryCount() const noexcept { return recoveries; }
 
 private:
     double effectiveLink() const noexcept
@@ -341,7 +358,9 @@ private:
             laDelay[ch].setDelay (lookaheadSamples + truePeakDelay(), immediate);
             dryDelay[ch].setDelay (total, immediate);
         }
-        configureLookaheadShapers (true);
+        // only reconfigures (and resets) the shapers if lookahead / kernel / mode changed, so
+        // switching mode, oversampling, colour or detector keeps the exact-lookahead state
+        configureLookaheadShapers (immediate);
     }
 
     /** Exact mode: kernel length from the attack time. The triangular kernel's step response
@@ -439,13 +458,13 @@ private:
             const double blend = blendS.next();
 
             double x[2], s[2];
-            x[0] = io[0][i];
-            x[1] = stereo ? io[1][i] : x[0];
+            x[0] = sanitise (io[0][i]);
+            x[1] = stereo ? sanitise (io[1][i]) : x[0];
 
             if (numScChannels > 0)
             {
-                s[0] = sc[0][i];
-                s[1] = numScChannels > 1 ? sc[1][i] : s[0];
+                s[0] = sanitise (sc[0][i]);
+                s[1] = numScChannels > 1 ? sanitise (sc[1][i]) : s[0];
             }
             else
             {
@@ -493,7 +512,7 @@ private:
                 delayed[ch] = laDelay[ch].process (p[ch]);
                 if (adaptRelease)
                     crest[ch].process (s[ch]);
-                double rD = 0.0, rA = 0.0;
+                double rD = 0.0, rA = 0.0, floorD = 0.0;
                 if (useD)
                 {
                     double d = s[ch];
@@ -511,6 +530,7 @@ private:
                     }
                     if (exactLA)
                         rD = std::max (rD, shaped); // ballistics may only add reduction
+                    floorD = shaped;
                 }
                 if (useA && fb)
                 {
@@ -539,6 +559,11 @@ private:
                     case EngineMode::analog:  r[ch] = rA; break;
                     case EngineMode::hybrid:  r[ch] = rD + blend * (rA - rD); break;
                 }
+                // Hybrid + feedback: the FB half cannot look ahead, so re-apply the digital path's
+                // exact-lookahead floor after blending (FF hybrid already satisfies it: a convex
+                // blend of two values that are each >= their own floor)
+                if (exactLA && fb && mode == EngineMode::hybrid)
+                    r[ch] = std::max (r[ch], floorD);
             }
 
             if (stereo && link > 0.0)
@@ -638,6 +663,18 @@ private:
         }
     }
 
+    /** Input guard. A NaN/Inf sample from upstream would otherwise enter every recursive state
+        (filters, detectors, envelopes, oversampler) and keep the output non-finite forever.
+        Non-finite samples become 0; finite ones are clamped to +/-1e6 (+120 dBFS), far above any
+        real signal, so squaring in the detectors cannot overflow. Normal samples pass unchanged
+        (bit-exact), so the transparent-path null tests are unaffected. */
+    static inline double sanitise (double v) noexcept
+    {
+        if (! std::isfinite (v))
+            return 0.0;
+        return v > 1.0e6 ? 1.0e6 : (v < -1.0e6 ? -1.0e6 : v);
+    }
+
     /** Zero-delay feedback: solve r = H(r) for this sample (see FeedbackSolver.h), then commit
         the detector chain and envelope with the converged output. The loop is closed around the
         envelope before its RC rounding stage (see AnalogEnvelope::peekBeforeRc); the returned,
@@ -712,7 +749,7 @@ private:
     LookaheadShaper<kMaxLookaheadSamples> laShapeD[kMaxChannels], laShapeA[kMaxChannels];
     int shaperKernel = -1, shaperLookahead = -1;
     bool shaperExact = false;
-    long long zdfSolves = 0, zdfEvaluations = 0;
+    long long zdfSolves = 0, zdfEvaluations = 0, recoveries = 0;
     KWeighting kIn[kMaxChannels], kOut[kMaxChannels];
     ColorStage<kMaxChannels> colour;
 

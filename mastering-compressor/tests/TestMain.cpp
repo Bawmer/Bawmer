@@ -6,6 +6,7 @@
 #include <complex>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -1560,6 +1561,145 @@ TEST (analogModelsFeedbackStress)
             finite = finite && std::isfinite (s.l[i]) && std::isfinite (s.r[i]);
         CHECK (finite, "model %d: non-finite output", (int) m);
         CHECK (e->getAverageSolverEvaluations() < 8.0, "model %d: solver average %.2f", (int) m, e->getAverageSolverEvaluations());
+    }
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// 17. audit fixes: robustness
+TEST (nonFiniteInputCannotPoisonTheEngine)
+{
+    // NaN / Inf / absurd values on the main or sidechain input must not leave any state
+    // non-finite. The engine treats non-finite samples as 0 and clamps to +/-1e6, so its output
+    // must be bit-identical to a clean run fed those substitute values.
+    const double fs = 48000.0;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for (auto mode : { EngineMode::ultraTransparent, EngineMode::digital, EngineMode::analog, EngineMode::hybrid })
+        for (auto topo : { Topology::feedForward, Topology::feedBack })
+            for (auto det : { DetectionMode::rms, DetectionMode::truePeak })
+            {
+                CompressorParams p;
+                p.mode = mode;
+                p.topology = topo;
+                p.detection = det;
+                p.thresholdDb = -20.0;
+                p.oversamplingLog2 = 2;
+                p.lookaheadMs = 2.0;
+                p.externalSidechain = true;
+                auto bad = makeEngine (fs, p);
+                auto ref = makeEngine (fs, p);
+                Stereo a = sine (fs, 440.0, 0.3, 48000), b = a;
+                Stereo scA = sine (fs, 90.0, 0.4, 48000), scB = scA;
+                a.l[1000] = nan;          b.l[1000] = 0.0;
+                a.r[2000] = -inf;         b.r[2000] = 0.0;
+                a.l[3000] = 1.0e300;      b.l[3000] = 1.0e6;
+                scA.l[4000] = inf;        scB.l[4000] = 0.0;
+                scA.r[5000] = nan;        scB.r[5000] = 0.0;
+                run (*bad, a, 512, &scA);
+                run (*ref, b, 512, &scB);
+                bool finite = true, identical = true;
+                for (size_t i = 0; i < a.size(); ++i)
+                {
+                    finite = finite && std::isfinite (a.l[i]) && std::isfinite (a.r[i]);
+                    identical = identical && a.l[i] == b.l[i] && a.r[i] == b.r[i];
+                }
+                CHECK (finite, "mode %d topo %d det %d: non-finite output", (int) mode, (int) topo, (int) det);
+                CHECK (identical, "mode %d topo %d det %d: differs from the sanitised reference", (int) mode, (int) topo, (int) det);
+                CHECK (bad->getRecoveryCount() == 0, "safety net triggered %lld times", bad->getRecoveryCount());
+            }
+}
+
+TEST (lookaheadRapidChangesAreClickFree)
+{
+    // Lookahead changes arriving faster than the 20 ms crossfade (every 5 ms) are deferred to the
+    // end of the running fade, never restarted mid-blend.
+    const double fs = 48000.0;
+    CompressorParams p = transparentDefaults();
+    p.thresholdDb = 0.0;
+    auto e = makeEngine (fs, p, 48);
+    Stereo s = sine (fs, 200.0, 0.5, static_cast<size_t> (fs));
+    const double maxStep = 0.5 * 2.0 * kPi * 200.0 / fs;
+    for (size_t pos = 0, k = 0; pos + 48 <= s.size(); pos += 48)
+    {
+        if (pos % 240 == 0) // every 5 ms
+        {
+            p.lookaheadMs = 0.5 + 19.0 * static_cast<double> ((k * 7) % 11) / 10.0;
+            ++k;
+            e->setParams (p);
+        }
+        double* io[2] = { s.l.data() + pos, s.r.data() + pos };
+        e->process (io, 2, nullptr, 0, 48);
+    }
+    double worst = 0.0;
+    for (size_t i = 1; i < s.size(); ++i)
+        worst = std::max (worst, std::abs (s.l[i] - s.l[i - 1]));
+    // a crossfade between two copies of the sine can at most add their slopes
+    CHECK (worst <= 2.0 * maxStep + 1e-9, "largest step %.4f (signal's own max step %.4f)", worst, maxStep);
+}
+
+TEST (exactLookaheadSurvivesStructuralChangesAndHybridFeedback)
+{
+    // Zero overshoot must hold (a) while oversampling and colour switches toggle during playback
+    // and (b) in Hybrid mode with the feedback topology.
+    const double fs = 48000.0;
+    for (int scenario = 0; scenario < 2; ++scenario)
+    {
+        CompressorParams p = transparentDefaults();
+        p.mode = EngineMode::hybrid;
+        p.topology = scenario == 1 ? Topology::feedBack : Topology::feedForward;
+        p.thresholdDb = -20.0;
+        p.ratio = 20.0;
+        p.attackMs = 1.0;
+        p.releaseMs = 50.0;
+        p.detection = DetectionMode::peak;
+        p.lookaheadMs = 5.0;
+        p.hybridBlend = 0.7;
+        p.transformer = p.amplifier = false;
+        p.colorMix = 0.0; // colour stage may switch on, but must not change levels for this check
+        auto e = makeEngine (fs, p, 480);
+        Stereo s (48000);
+        for (size_t i = 0; i < s.size(); ++i)
+            s.l[i] = s.r[i] = 0.01 * std::sin (2.0 * kPi * 300.0 * i / fs)
+                              + ((i % 4800 < 24) ? std::sin (2.0 * kPi * 5000.0 * i / fs) : 0.0);
+        const Stereo in = s;
+        std::vector<int> latencyAt (s.size(), e->getLatencySamples());
+        for (size_t pos = 0, k = 0; pos < s.size(); pos += 480, ++k)
+        {
+            if (scenario == 0 && k % 10 == 5)
+            {
+                p.oversamplingLog2 = static_cast<int> (k / 10) % 3; // 0, 1, 2 -> latency changes
+                p.amplifier = ! p.amplifier;
+                e->setParams (p);
+            }
+            double* io[2] = { s.l.data() + pos, s.r.data() + pos };
+            e->process (io, 2, nullptr, 0, 480);
+        }
+        // compare only regions away from latency changes (where the delay crossfades)
+        const size_t L = static_cast<size_t> (e->getLatencySamples());
+        double worst = -1e9;
+        for (size_t i = 4800 + L; i < s.size(); ++i)
+        {
+            if (scenario == 0)
+                continue; // latency moves in scenario 0: checked below via the static lookahead
+            const double x = std::abs (in.l[i - L]);
+            if (x < 1e-4)
+                continue;
+            const double xd = 20.0 * std::log10 (x);
+            worst = std::max (worst, 20.0 * std::log10 (std::abs (s.l[i]) + 1e-300) - GainComputer::staticOutput (xd, -20.0, 20.0, 0.0));
+        }
+        if (scenario == 1)
+            CHECK (worst <= 1e-6, "hybrid + feedback: overshoot %.3f dB", worst);
+        else
+        {
+            // with colour toggling the latency moves, so measure the burst peaks directly: every
+            // burst must come out at or below the static-curve level of a 0 dBFS input
+            const double allowed = dbToGain (GainComputer::staticOutput (0.0, -20.0, 20.0, 0.0)) * 1.000001;
+            double peak = 0.0;
+            for (size_t i = 9600; i < s.size(); ++i)
+                peak = std::max (peak, std::abs (s.l[i]));
+            CHECK (peak <= allowed, "structural toggles: burst peak %.4f > allowed %.4f", peak, allowed);
+        }
     }
 }
 

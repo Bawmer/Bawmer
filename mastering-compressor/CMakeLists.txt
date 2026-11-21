@@ -98,3 +98,18 @@ if(LUMEN_BUILD_PLUGIN AND LUMEN_BUILD_UI_SNAPSHOT)
     target_link_libraries(lumen_ui_snapshot PRIVATE juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags)
 endif()
+
+# --- plugin-level tests (state, undo, presets, A/B, threading); headless -------------------
+if(LUMEN_BUILD_PLUGIN AND LUMEN_BUILD_TESTS)
+    juce_add_console_app(lumen_plugin_tests PRODUCT_NAME "lumen_plugin_tests")
+    target_sources(lumen_plugin_tests PRIVATE tools/PluginTests.cpp
+        plugin/Source/Parameters.cpp plugin/Source/PresetManager.cpp plugin/Source/PluginProcessor.cpp
+        plugin/Source/PluginEditor.cpp plugin/Source/LookAndFeel.cpp plugin/Source/Displays.cpp)
+    target_include_directories(lumen_plugin_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dsp/include)
+    target_compile_definitions(lumen_plugin_tests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JucePlugin_Name="Lumen MC-64" JUCE_STANDALONE_APPLICATION=1
+        JUCE_MODAL_LOOPS_PERMITTED=1) # tests pump the message loop to run async callbacks
+    target_link_libraries(lumen_plugin_tests PRIVATE juce::juce_audio_utils juce::juce_dsp
+        juce::juce_recommended_config_flags)
+    add_test(NAME lumen_plugin_tests COMMAND lumen_plugin_tests)
+endif()
