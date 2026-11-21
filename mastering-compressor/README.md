@@ -33,7 +33,7 @@ mastering-compressor/
 │   └── CompressorEngine.h    the complete engine (routing, link, M/S, mix, bypass, metering)
 ├── plugin/Source/            JUCE wrapper: parameters, processor, presets, UI
 ├── docs/                     engine development prompt + design/measurement notes
-├── tests/TestMain.cpp        automated DSP verification (37 tests)
+├── tests/TestMain.cpp        automated DSP verification (43 tests)
 └── tools/UiSnapshot.cpp      dev tool: renders the UI to PNG while audio runs
 ```
 
@@ -81,7 +81,7 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 |---|---|---|---|---|
 | **Ultra Transparent** (default) | feed-forward, user knee | digital + extra anti-modulation pole | hard-bypassed | no oversampling or DC filter. Below threshold the output is **bit-identical** to the input (tested) |
 | **Digital** | feed-forward, user knee | exact one-pole branching in dB | hard-bypassed | predictable, textbook timing |
-| **Analog** | FF or FB, frequency-dependent detector, knee ≥ 6 dB | program-dependent attack, dual release, RC-rounded onset | transformer + amplifier (optional) | |
+| **Analog** | FF or FB, frequency-dependent detector, knee set by the *Analog Model* | depends on the model: VCA, Opto, Vari-Mu or FET | transformer + amplifier (optional); vari-mu and FET distortion grows with gain reduction | behavioural archetypes, not circuit models (see `docs/ENGINE_NOTES.md` §8) |
 | **Hybrid** | both engines on one detector | blended in dB (*Hybrid Blend*) | adjustable (*Colour Mix*) | compression and saturation are controlled separately |
 
 ### DSP design notes
@@ -163,6 +163,7 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 |---|---|---|---|
 | Threshold | −60 … 0 dB | SC HPF | 20 … 500 Hz (on/off) |
 | Ratio | 1:1 … 20:1 | SC LPF | 1 … 20 kHz (on/off) |
+| Analog Model | VCA / Opto / Vari-Mu / FET | | |
 | Attack | 0.01 … 250 ms | Detection | Peak / RMS / Hybrid / True Peak |
 | Release | 10 ms … 5 s | Channels | Stereo / Dual Mono / Mid-Side |
 | Hold | 0 … 50 ms | Release Mode | Manual / Auto Smooth / Auto Program / Auto Fast |
@@ -187,7 +188,7 @@ aspect ratio, high-DPI). It has:
 
 ## Verification
 
-`tests/TestMain.cpp` runs 37 tests (about 7 s). All pass on GCC 13 / Linux, and they are also
+`tests/TestMain.cpp` runs 43 tests (about 10 s). All pass on GCC 13 / Linux, and they are also
 clean under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 | Area | What is checked |
@@ -196,6 +197,7 @@ clean under AddressSanitizer and UndefinedBehaviorSanitizer.
 | Lookahead | shaper guarantee property test. Zero overshoot (≤ 1e-6 dB) in all modes. Click-free lookahead changes. Drift-free running sums over 10 M samples |
 | True peak | ≤ 0.02 dB from an ideal 4× interpolator up to 0.45·fs. Catches the fs/4-at-45° inter-sample peak that sample peak misses. Latency and null stay exact. Lookahead guarantee holds |
 | Release / hold | adaptive release depends on duration, depth and crest. The multiplier never jumps. Shape ordering holds. Hold ≥ 1/(2f) removes 30 Hz ripple (Digital and Analog modes). Hybrid detector is smooth |
+| Analog models | each model settles on its own curve in FF and FB. Vari-mu ratio rises with level. Opto two-stage release with memory. FET is fastest. Vari-mu H2 and FET H3 grow with gain reduction; opto stays clean. Feedback stress for every model |
 | Feedback (ZDF) | settled FB = FF within 0.01 dB up to 20:1. Bare-loop timing equals FF within 1 sample. Engine attack within 25 % of FF with no extra overshoot. Solver stress test (16× bursts, square waves, 1e-8 signals) stays finite with < 8 evaluations on average |
 | Attack / release | measured time constants match 1−1/e within 0.3 dB. Auto-release recovers short bursts at least 2.5× faster than sustained compression |
 | Smoothness | max per-sample gain step. Ultra mode has lower gain-trajectory curvature than Digital |
@@ -225,8 +227,11 @@ about 3 % for the per-sample loop solve.
   but switching the colour stage on or off still jumps the wet path's latency.
 * **Linked feedback**: each channel's feedback loop is solved with its own gain, and the
   stereo link is applied afterwards. A coupled 2-channel solve isn't implemented.
-* **Engine roadmap**: a C² knee, anti-modulation smoother selection, link-law bounds, and
-  opto / vari-mu / FET models are still open (see `docs/ENGINE_NOTES.md`).
+* **Engine roadmap**: a C² knee, anti-modulation smoother selection and link-law bounds are
+  still open (see `docs/ENGINE_NOTES.md`).
+* **Analog models** reproduce documented behaviour of each family (timing, knee, how
+  distortion relates to compression). They aren't circuit simulations, and they haven't been
+  compared against measurements of real units.
 * **Saved sessions** from before round 2 lose their auto-release setting: the on/off
   parameter was replaced by *Release Mode*.
 * **Minimum-phase oversampling** is not offered. The two choices are linear phase and a

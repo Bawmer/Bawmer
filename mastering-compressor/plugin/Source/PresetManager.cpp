@@ -9,6 +9,7 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& s) : state (s)
     // mode: 0 Ultra, 1 Digital, 2 Analog, 3 Hybrid | detection: 0 Peak, 1 RMS, 2 Hybrid
     // channelMode: 0 Stereo, 1 Dual Mono, 2 M/S | topology: 0 FF, 1 FB
     // releaseMode: 0 Manual, 1 Auto Smooth, 2 Auto Program, 3 Auto Fast
+    // analogModel: 0 VCA, 1 Opto, 2 Vari-Mu, 3 FET
     factory = {
         { "Init - Ultra Transparent", {} },
         { "Mastering Glue 2:1", { { mode, 1 }, { threshold, -18 }, { ratio, 2 }, { attack, 30 }, { release, 300 },
@@ -29,13 +30,17 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& s) : state (s)
                                      { attack, 20 }, { release, 250 }, { knee, 6 } } },
         { "Analog Warmth", { { mode, 2 }, { threshold, -16 }, { ratio, 2 }, { attack, 20 }, { release, 250 },
                              { drive, 6 }, { character, 40 } } },
-        { "Analog Feedback Vintage", { { mode, 2 }, { topology, 1 }, { threshold, -20 }, { ratio, 4 }, { attack, 15 },
+        { "Analog Feedback Vintage", { { mode, 2 }, { analogModel, 3 }, { topology, 1 }, { threshold, -20 }, { ratio, 4 }, { attack, 15 },
                                        { release, 400 }, { drive, 9 }, { character, 55 } } },
+        { "Opto Leveler", { { mode, 2 }, { analogModel, 1 }, { threshold, -20 }, { ratio, 3 }, { attack, 10 },
+                            { release, 300 }, { knee, 12 }, { transformer, 0 }, { amplifier, 0 } } },
+        { "Vari-Mu Glue", { { mode, 2 }, { analogModel, 2 }, { threshold, -18 }, { ratio, 2 }, { attack, 20 },
+                            { release, 400 }, { drive, 6 }, { character, 40 } } },
         { "Rock Bus Weight", { { mode, 2 }, { threshold, -18 }, { ratio, 3 }, { attack, 25 }, { release, 180 },
                                { drive, 8 }, { character, 30 }, { amplifier, 0 } } },
         { "Hybrid Punch", { { mode, 3 }, { threshold, -18 }, { ratio, 3 }, { attack, 25 }, { release, 150 },
                             { blend, 60 }, { drive, 4 }, { colorMix, 60 } } },
-        { "Jazz Natural Hybrid", { { mode, 3 }, { threshold, -22 }, { ratio, 1.8f }, { attack, 40 }, { release, 700 },
+        { "Jazz Natural Hybrid", { { mode, 3 }, { analogModel, 1 }, { threshold, -22 }, { ratio, 1.8f }, { attack, 40 }, { release, 700 },
                                    { knee, 12 }, { blend, 40 }, { drive, 3 }, { colorMix, 40 }, { releaseMode, 1 } } },
         { "Pop Polish", { { mode, 3 }, { threshold, -17 }, { ratio, 2.5f }, { attack, 15 }, { release, 200 },
                           { knee, 8 }, { blend, 50 }, { drive, 5 }, { colorMix, 50 }, { releaseMode, 2 } } },

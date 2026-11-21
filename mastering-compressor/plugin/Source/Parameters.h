@@ -27,6 +27,7 @@ inline constexpr const char* detection = "detection";
 inline constexpr const char* extSc = "extSc";
 inline constexpr const char* channelMode = "channelMode";
 inline constexpr const char* topology = "topology";
+inline constexpr const char* analogModel = "analogModel";
 inline constexpr const char* blend = "blend";
 inline constexpr const char* drive = "drive";
 inline constexpr const char* character = "character";
@@ -54,7 +55,7 @@ private:
     std::atomic<float>* get (juce::AudioProcessorValueTreeState& s, const char* id);
 
     std::atomic<float> *mode, *threshold, *ratio, *attack, *release, *knee, *makeup, *mix, *link, *scHpfOn, *scHpf,
-        *scLpfOn, *scLpf, *releaseMode, *hold, *autoGain, *lookahead, *lookaheadMode, *detection, *extSc, *channelMode, *topology, *blend,
+        *scLpfOn, *scLpf, *releaseMode, *hold, *autoGain, *lookahead, *lookaheadMode, *detection, *extSc, *channelMode, *topology, *analogModel, *blend,
         *drive, *character, *colorMix, *transformer, *amplifier, *oversampling, *osQuality, *bypass, *matchBypass;
 };
 } // namespace lumen

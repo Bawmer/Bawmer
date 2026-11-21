@@ -72,6 +72,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                        juce::StringArray { "Stereo", "Dual Mono", "Mid/Side" }, 0));
     layout.add (std::make_unique<APC> (juce::ParameterID { ids::topology, 1 }, "Topology",
                                        juce::StringArray { "Feed-Forward", "Feedback" }, 0));
+    layout.add (std::make_unique<APC> (juce::ParameterID { ids::analogModel, 1 }, "Analog Model",
+                                       juce::StringArray { "VCA", "Opto", "Vari-Mu", "FET" }, 0));
     layout.add (floatParam (ids::blend, "Hybrid Blend", { 0.0f, 100.0f, 0.1f }, 50.0f, fmtPct, "%"));
 
     layout.add (floatParam (ids::drive, "Drive", { 0.0f, 24.0f, 0.01f }, 6.0f, fmtDb, "dB"));
@@ -113,6 +115,7 @@ ParameterReader::ParameterReader (juce::AudioProcessorValueTreeState& s)
     extSc = get (s, ids::extSc);
     channelMode = get (s, ids::channelMode);
     topology = get (s, ids::topology);
+    analogModel = get (s, ids::analogModel);
     blend = get (s, ids::blend);
     drive = get (s, ids::drive);
     character = get (s, ids::character);
@@ -165,6 +168,7 @@ CompressorParams ParameterReader::read() const noexcept
     p.externalSidechain = b (extSc);
     p.channelMode = static_cast<ChannelMode> (juce::jlimit (0, 2, i (channelMode)));
     p.topology = static_cast<Topology> (juce::jlimit (0, 1, i (topology)));
+    p.analogModel = static_cast<AnalogModel> (juce::jlimit (0, 3, i (analogModel)));
     p.hybridBlend = f (blend) * 0.01;
     p.driveDb = f (drive);
     p.character = f (character) * 0.01;

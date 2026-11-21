@@ -14,6 +14,7 @@
 #pragma once
 
 #include "DspCommon.h"
+#include "Envelope.h"
 #include "Filters.h"
 #include "Oversampler.h"
 
@@ -26,6 +27,7 @@ struct ColorSettings
     double driveDb = 6.0;   // 0..24 dB into the nonlinear stages
     double character = 0.35; // 0..1 : 3rd-heavy .. 2nd-heavy
     double amount = 1.0;     // 0..1 wet amount of the colour (hybrid blend)
+    AnalogModel model = AnalogModel::vca; // gain-reduction-dependent distortion (amplifier stage)
 };
 
 /** Static curves, exposed for tests and the UI. */
@@ -98,8 +100,15 @@ public:
     }
 
     /** In-place; channels already at the base rate. Parameter smoothing is updated per base sample
-        (held over the oversampled sub-samples). */
-    void process (double* const* channels, int numChannels, int numSamples) noexcept
+        (held over the oversampled sub-samples).
+
+        grDb (optional, one value per sample): the gain reduction being applied. Models whose
+        distortion depends on compression use it in the amplifier stage:
+          variMu : bias (asymmetry -> 2nd harmonic) rises by up to +0.25 at 20 dB GR
+          fet    : drive into the stage rises by up to +10 dB at 20 dB GR (odd harmonics), at
+                   half the static bias
+        Averaged per 16-sample sub-block and smoothed, so it cannot zipper. */
+    void process (double* const* channels, int numChannels, int numSamples, const double* grDb = nullptr) noexcept
     {
         numChannels = std::min (numChannels, MaxChannels);
         const bool useTransformer = settings.transformer;
@@ -116,8 +125,24 @@ public:
                 character = charSmoother.next();
                 amount = amountSmoother.next();
             }
-            const double invDrive = 1.0 / drive;
-            const double bias = 0.02 + 0.2 * character;
+            double grAvg = 0.0;
+            if (grDb != nullptr)
+            {
+                for (int i = 0; i < n; ++i)
+                    grAvg += grDb[start + i];
+                grAvg /= n;
+            }
+            grState += 0.5 * (std::min (grAvg, 20.0) - grState);
+            double modelDrive = drive;
+            double bias = 0.02 + 0.2 * character;
+            switch (settings.model)
+            {
+                case AnalogModel::variMu: bias += 0.25 * grState / 20.0; break;
+                case AnalogModel::fet:    modelDrive *= dbToGain (0.5 * grState); bias *= 0.5; break;
+                case AnalogModel::vca:
+                case AnalogModel::opto:   break;
+            }
+            const double invDrive = 1.0 / modelDrive;
             const double k = 1.0;
 
             double* sub[MaxChannels];
@@ -125,7 +150,7 @@ public:
                 sub[ch] = channels[ch] + start;
 
             os.process (sub, numChannels, n, [&] (int ch, double x) noexcept {
-                double y = x * drive;
+                double y = x * modelDrive;
                 if (useTransformer)
                 {
                     // low band driven ~6 dB harder than the rest; only the distortion is added back
@@ -153,6 +178,7 @@ private:
     OnePole lfSplit[MaxChannels];
     OnePole dcBlock[MaxChannels];
     LinearSmoother driveSmoother, charSmoother, amountSmoother;
+    double grState = 0.0;
     int osLog2 = 0;
     OversamplingQuality osQuality = OversamplingQuality::linearPhaseHQ;
 };

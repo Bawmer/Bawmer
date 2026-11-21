@@ -2,6 +2,7 @@
 
 * Round 1 — exact lookahead and zero-delay feedback (§1–3 below)
 * Round 2 — true peak, adaptive release, hold, smooth hybrid detector (§4–7)
+* Round 3 — analog component models (§8)
 
 ---
 
@@ -276,19 +277,76 @@ THD+N on a 30 Hz sine (peak detection, attack 0.1 ms, release 30 ms, 4:1, −6 d
 |---|---|---|---|---|
 | THD+N | −24.9 dB | −29.4 dB | **−270 dB** (numerical floor) | −270 dB |
 
+# Round 3: analog component models
+
+This round implements section 7.1 of the prompt.
+
+## 8. VCA / Opto / Vari-Mu / FET (`AnalogModel`)
+
+*Analog Model* selects one of four **behavioural archetypes** in Analog and Hybrid modes. Each
+one models widely documented behaviour of a family of gain-control circuits: timing, knee shape,
+and how distortion relates to gain reduction. **None is a circuit simulation, and none models a
+specific product.** All four share the engine's infrastructure: the exact feedback law, the
+zero-delay loop, hold, auto-release and exact lookahead.
+
+| Model | Static character | Timing | Distortion (AMP stage on) |
+|---|---|---|---|
+| VCA | knee ≥ 6 dB | program-dependent attack (0.5–3×), dual release, 0.35 ms RC | none beyond the amp setting |
+| Opto | knee ≥ 12 dB | attack ×2, 1.5 ms RC; two-stage release with light memory | none (clean) |
+| Vari-Mu | knee ≥ 18 dB: the ratio *rises* with level | attack ×1.5, 2 ms RC, gentler fast release | amp bias +0.25 at 20 dB GR → 2nd harmonic grows with compression |
+| FET | knee as set | attack ×0.25, no gentle start, 0.05 ms RC | amp drive +10 dB at 20 dB GR → odd harmonics grow with compression |
+
+**Opto light memory.** The slow branch charges over about 1.5 s of compression. Its decay
+stretches by `1 + min(3, stored/6 dB)`, computed with the exp-free form
+`c' = 1 − (1 − c)/(1 + mf)`. The output is `max(fast, 0.5·stored)`. The fast branch drops
+quickly and the output then rides on half the stored light. In steady state the stored value
+equals the fast branch, so the static curve is unchanged.
+
+**Feedback compatibility.** The model state stays inside `evaluate()`'s explicit state, so
+`H(r)` remains pure and non-increasing. The opto output is a max of non-decreasing functions
+of the target, and the hold branch is target-independent. Every model also works in the
+zero-delay feedback loop, and each settles on its static curve in both FF and FB.
+
+**Distortion routing.** Model distortion goes through the oversampled *AMP* stage, using the
+gain reduction averaged per 16-sample block and smoothed. Turning AMP or the colour stage off
+removes it, so analog character is always something you choose.
+
+### Measurements
+
+48 kHz, 1 kHz sine, threshold −30 dB, 4:1, release 300 ms, attack control 10 ms.
+
+| | VCA | Opto | Vari-Mu | FET |
+|---|---|---|---|---|
+| Worst settled error vs. own curve (−36 … −12 dB in) | 0.025 dB | 0.034 dB | 0.025 dB | 0.009 dB |
+| Local ratio at threshold +2 / +8 / +16 dB | 2.67 / 4 / 4 | 2.00 / 4 / 4 | **1.85 / 3.43 / 4** | 4 / 4 / 4 |
+| Attack 63 % (DC step) | 6.15 ms | 13.88 ms | 11.33 ms | **1.08 ms** |
+| GR left 100 ms after a 0.5 s burst | 87 % | **22 %** | 89 % | 84 % |
+| … after an 8 s burst | 92 % | **48 %** | 94 % | 89 % |
+| Recovery to < 1 dB, 0.5 s / 8 s burst | 968 / 981 ms | **596 / 1526 ms** | 1015 / 1027 ms | 929 / 943 ms |
+
+Harmonics relative to the VCA model with identical settings (AMP on, drive 6 dB, character
+35 %). Absolute harmonic levels *fall* with more compression in every model, because the stage
+sits after the gain and sees a quieter signal. So the model effect is reported as the excess
+over VCA:
+
+| | ~3 dB GR | 15 dB GR |
+|---|---|---|
+| Vari-Mu excess H2 | +2.0 dB | **+9.6 dB** |
+| FET excess H3 | +1.4 dB | **+14.8 dB** |
+| Opto excess H2 | ≈ 0 | ≈ 0 |
+
 ## Verification status
 
-37 tests pass, clean under AddressSanitizer and UndefinedBehaviorSanitizer. The plugin builds
+43 tests pass, clean under AddressSanitizer and UndefinedBehaviorSanitizer. The plugin builds
 with zero warnings.
 
-Round 1 added 9 tests: lookahead guarantee, zero overshoot, click-free changes, drift, exact
-feedback law, curve inverse, and three feedback tests. Round 2 adds 6:
-* `truePeakInterpolatorAccuracy`: ≤ 0.02 dB versus an ideal grid; over-read ≤ 0.02 dB
-* `truePeakEngineIntegration`: inter-sample catch, latency, bit-exact null, lookahead guarantee
-* `holdRemovesLowFrequencyRipple`: Digital and Analog modes
-* `adaptiveReleaseProgramDependence`: duration, depth, crest and shape ordering
-* `adaptiveReleaseMultiplierIsSlow`
-* `hybridDetectorIsSmooth`
+Round 3 adds 6 tests:
+* `analogModelsStaticCurve`: 4 models × FF/FB × 4 levels, within 0.06 dB
+* `variMuRatioRisesWithLevel`
+* `optoTwoStageReleaseWithMemory`
+* `analogModelAttackCharacter`
+* `modelDistortionGrowsWithGainReduction`: includes the check that opto stays clean
+* `analogModelsFeedbackStress`: every model in the zero-delay loop with hold and auto release
 
 ## Next rounds (remaining sections of the prompt)
 
@@ -296,4 +354,3 @@ feedback law, curve inverse, and three feedback tests. Round 2 adds 6:
 * §5 anti-modulation smoother selection by sideband measurement; gain-path oversampling
   decision for very fast attacks
 * §5.4 link-law and image-shift bounds
-* §7.1 opto / vari-mu / FET component models

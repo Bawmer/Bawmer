@@ -57,6 +57,7 @@ struct CompressorParams
     bool externalSidechain = false;
     ChannelMode channelMode = ChannelMode::stereo;
     Topology topology = Topology::feedForward; // Analog/Hybrid only
+    AnalogModel analogModel = AnalogModel::vca; // Analog/Hybrid only
     double hybridBlend = 0.5;    // 0 = digital envelope, 1 = analog envelope
     // analog colour (Analog/Hybrid)
     bool transformer = true;
@@ -102,6 +103,7 @@ public:
             b.assign (static_cast<size_t> (maxBlockSize), 0.0);
         for (auto& b : dry)
             b.assign (static_cast<size_t> (maxBlockSize), 0.0);
+        grBuffer.assign (static_cast<size_t> (maxBlockSize), 0.0);
 
         for (int ch = 0; ch < kMaxChannels; ++ch)
         {
@@ -179,6 +181,7 @@ public:
                             || p.attackMs != params.attackMs || p.releaseMs != params.releaseMs
                             || p.autoRelease != params.autoRelease || p.ratio != params.ratio
                             || p.autoReleaseShape != params.autoReleaseShape || p.holdMs != params.holdMs
+                            || p.analogModel != params.analogModel
                             || p.topology != params.topology || p.externalSidechain != params.externalSidechain;
         const bool scFilters = firstParams || p.scHpfHz != params.scHpfHz || p.scLpfHz != params.scLpfHz
                                || p.scHpfOn != params.scHpfOn || p.scLpfOn != params.scLpfOn;
@@ -243,6 +246,7 @@ public:
         cs.driveDb = params.driveDb;
         cs.character = params.character;
         cs.amount = params.colorMix;
+        cs.model = params.analogModel;
         colour.setSettings (cs);
 
         firstParams = false;
@@ -256,8 +260,11 @@ public:
         return lookaheadSamples + truePeakDelay() + (colourActive() ? colour.getLatencySamples() : 0);
     }
 
-    /** Effective knee shown in the UI / used by the analog path. */
-    static double analogKnee (double kneeDb) noexcept { return std::max (kneeDb, 6.0); }
+    /** Effective knee shown in the UI / used by the analog path (each model has a minimum knee). */
+    static double analogKnee (double kneeDb, AnalogModel model = AnalogModel::vca) noexcept
+    {
+        return analogModelKnee (model, kneeDb);
+    }
 
     /** Process numSamples in place. sidechain may be null (or numScChannels 0). */
     void process (double* const* io, int numChannels, const double* const* sidechain, int numScChannels,
@@ -365,6 +372,7 @@ private:
         b.autoRelease = params.autoRelease;
         b.shape = params.autoReleaseShape;
         b.holdMs = params.holdMs;
+        b.model = params.analogModel;
         releaseShape = ReleaseShapeTable::get (params.autoReleaseShape);
 
         // Feedback runs as a zero-delay loop (FeedbackSolver.h), which is stable for any
@@ -426,7 +434,7 @@ private:
             const double thr = thresholdS.next();
             const double ratio = ratioS.next();
             const double knee = kneeS.next();
-            const double kneeA = analogKnee (knee);
+            const double kneeA = analogKnee (knee, params.analogModel);
             const double link = linkS.next();
             const double blend = blendS.next();
 
@@ -548,6 +556,7 @@ private:
                 smoothedReduction[ch] = depthCoeff * smoothedReduction[ch] + (1.0 - depthCoeff) * r[ch];
                 avgReductionAccum += r[ch];
             }
+            grBuffer[static_cast<size_t> (i)] = stereo ? std::max (r[0], r[1]) : r[0];
             avgReduction = autoGainCoeff * avgReduction + (1.0 - autoGainCoeff) * (avgReductionAccum / procCh);
             avgReductionAccum = 0.0;
 
@@ -566,7 +575,7 @@ private:
         if (colourActive())
         {
             double* chans[2] = { wetL, wetR };
-            colour.process (chans, numChannels, n);
+            colour.process (chans, numChannels, n, grBuffer.data());
         }
 
         // makeup, auto gain, mix, loudness-matched bypass
@@ -691,6 +700,7 @@ private:
     int lookaheadSamples = 0;
 
     std::array<std::vector<double>, kMaxChannels> wet, dry;
+    std::vector<double> grBuffer;
 
     LevelDetector detDigital[kMaxChannels], detAnalog[kMaxChannels];
     DigitalEnvelope envDigital[kMaxChannels];

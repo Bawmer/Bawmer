@@ -1381,6 +1381,188 @@ TEST (hybridDetectorIsSmooth)
     CHECK (LevelDetector::softplus (-6.0) < 1e-5, "RMS calibration disturbed: %.3g dB", LevelDetector::softplus (-6.0));
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// 16. analog component models
+namespace
+{
+CompressorParams modelParams (AnalogModel m)
+{
+    CompressorParams p = transparentDefaults();
+    p.mode = EngineMode::analog;
+    p.analogModel = m;
+    p.transformer = p.amplifier = false;
+    p.thresholdDb = -30.0;
+    p.ratio = 4.0;
+    p.attackMs = 10.0;
+    p.releaseMs = 300.0;
+    p.detection = DetectionMode::rms;
+    return p;
+}
+const AnalogModel kAllModels[] = { AnalogModel::vca, AnalogModel::opto, AnalogModel::variMu, AnalogModel::fet };
+} // namespace
+
+TEST (analogModelsStaticCurve)
+{
+    // Every model's dynamics are its own; once settled, each lands on the static curve with its
+    // characteristic knee (1 kHz, where the detector tilt is ~flat), in FF and in FB.
+    const double fs = 48000.0;
+    for (auto m : kAllModels)
+        for (auto topo : { Topology::feedForward, Topology::feedBack })
+            for (double in : { -36.0, -30.0, -24.0, -12.0 })
+            {
+                CompressorParams p = modelParams (m);
+                p.topology = topo;
+                p.releaseMs = 200.0;
+                auto e = makeEngine (fs, p, 480);
+                Stereo s = sine (fs, 1000.0, dbToGain (in), 480 * 400);
+                run (*e, s, 480);
+                const double out = toneLevelDb (s.l, s.size() - 32768, 32768, fs, 1000.0);
+                const double expected = GainComputer::staticOutput (in, -30.0, 4.0, analogModelKnee (m, 0.0));
+                CHECK (std::abs (out - expected) < 0.06, "model %d topo %d in %.0f: %.3f dB off the curve", (int) m,
+                       (int) topo, in, out - expected);
+            }
+}
+
+TEST (variMuRatioRisesWithLevel)
+{
+    // Vari-mu character: the local ratio climbs gradually over ~18 dB above threshold.
+    const double k = analogModelKnee (AnalogModel::variMu, 0.0);
+    auto localRatio = [&] (double x) {
+        const double slope = (GainComputer::staticOutput (x + 0.01, -30.0, 4.0, k) - GainComputer::staticOutput (x - 0.01, -30.0, 4.0, k)) / 0.02;
+        return 1.0 / slope;
+    };
+    const double r2 = localRatio (-28.0), r8 = localRatio (-22.0), r16 = localRatio (-14.0);
+    CHECK (r2 < 2.0 && r2 < r8 && r8 < r16, "local ratios %.2f / %.2f / %.2f", r2, r8, r16);
+    CHECK (k >= 18.0, "vari-mu knee %.1f dB", k);
+}
+
+TEST (optoTwoStageReleaseWithMemory)
+{
+    // Opto character: after a short burst most of the reduction recovers within 100 ms (fast
+    // stage); after a long burst the stored "light" holds a slow tail.
+    const double fs = 48000.0;
+    auto measure = [&] (double burstSec, double& fractionAt100ms, double& timeTo1dB) {
+        CompressorParams p = modelParams (AnalogModel::opto);
+        auto e = makeEngine (fs, p, 480);
+        const size_t nb = static_cast<size_t> (burstSec * fs);
+        size_t n = nb + 480 * 1500;
+        n -= n % 480;
+        Stereo s (n);
+        for (size_t i = 0; i < n; ++i)
+            s.l[i] = s.r[i] = (i < nb ? 0.5 : 0.005) * std::sin (2.0 * kPi * 1000.0 * i / fs);
+        const Stereo in = s;
+        run (*e, s, 480);
+        auto gr = [&] (size_t i) {
+            double a = 0.0, b = 0.0;
+            for (size_t k = 0; k < 48; ++k) { a += in.l[i + k] * in.l[i + k]; b += s.l[i + k] * s.l[i + k]; }
+            return 10.0 * std::log10 (a / (b + 1e-300));
+        };
+        const double g0 = gr (nb - 48);
+        fractionAt100ms = gr (nb + 4800) / g0;
+        timeTo1dB = 1e9;
+        for (size_t i = nb; i + 48 < n; i += 48)
+            if (gr (i) < 1.0) { timeTo1dB = static_cast<double> (i - nb) / 48.0; break; }
+    };
+    double fShort, tShort, fLong, tLong;
+    measure (0.5, fShort, tShort);
+    measure (8.0, fLong, tLong);
+    CHECK (fShort < 0.35, "short burst: %.0f %% of GR left after 100 ms", 100.0 * fShort);
+    CHECK (fLong > fShort + 0.15, "memory: %.0f %% (long) vs %.0f %% (short) left after 100 ms", 100.0 * fLong, 100.0 * fShort);
+    CHECK (tLong > 1.8 * tShort, "memory: recovery %.0f ms (long) vs %.0f ms (short)", tLong, tShort);
+}
+
+TEST (analogModelAttackCharacter)
+{
+    // Same attack control: FET is much faster than VCA; opto and vari-mu are slower.
+    const double fs = 48000.0;
+    double t63[4];
+    for (auto m : kAllModels)
+    {
+        CompressorParams p = modelParams (m);
+        p.detection = DetectionMode::peak;
+        p.releaseMs = 1000.0;
+        auto e = makeEngine (fs, p);
+        Stereo s (48000);
+        std::fill (s.l.begin(), s.l.end(), 1.0);
+        std::fill (s.r.begin(), s.r.end(), 1.0);
+        run (*e, s);
+        const double fin = -20.0 * std::log10 (s.l.back());
+        size_t i = 0;
+        while (i < s.size() && -20.0 * std::log10 (s.l[i]) < fin * (1.0 - std::exp (-1.0)))
+            ++i;
+        t63[(int) m] = static_cast<double> (i) / 48.0;
+    }
+    const double vca = t63[0], opto = t63[1], vm = t63[2], fet = t63[3];
+    CHECK (fet < 0.25 * vca, "FET %.2f ms vs VCA %.2f ms", fet, vca);
+    CHECK (opto > 1.5 * vca && vm > 1.2 * vca, "opto %.2f / vari-mu %.2f vs VCA %.2f ms", opto, vm, vca);
+}
+
+TEST (modelDistortionGrowsWithGainReduction)
+{
+    // Relative to the VCA model with identical settings, vari-mu adds 2nd harmonic and FET adds
+    // 3rd harmonic, and the excess grows with gain reduction.
+    const double fs = 48000.0;
+    auto harmonic = [&] (AnalogModel m, double thr, double harmonicHz) {
+        CompressorParams p = modelParams (m);
+        p.amplifier = true;
+        p.driveDb = 6.0;
+        p.character = 0.35;
+        p.thresholdDb = thr;
+        p.oversamplingLog2 = 2;
+        p.attackMs = 20.0;
+        p.releaseMs = 500.0;
+        auto e = makeEngine (fs, p, 480);
+        Stereo s = sine (fs, 1000.0, 0.5, 480 * 300);
+        run (*e, s, 480);
+        const size_t len = 32768, from = s.size() - len;
+        return toneLevelDb (s.l, from, len, fs, harmonicHz) - toneLevelDb (s.l, from, len, fs, 1000.0);
+    };
+    const double vmLow = harmonic (AnalogModel::variMu, -8.0, 2000.0) - harmonic (AnalogModel::vca, -8.0, 2000.0);
+    const double vmHigh = harmonic (AnalogModel::variMu, -26.0, 2000.0) - harmonic (AnalogModel::vca, -26.0, 2000.0);
+    CHECK (vmHigh > vmLow + 5.0 && vmHigh > 5.0, "vari-mu excess H2: %.1f dB (low GR) -> %.1f dB (high GR)", vmLow, vmHigh);
+    const double fetLow = harmonic (AnalogModel::fet, -8.0, 3000.0) - harmonic (AnalogModel::vca, -8.0, 3000.0);
+    const double fetHigh = harmonic (AnalogModel::fet, -26.0, 3000.0) - harmonic (AnalogModel::vca, -26.0, 3000.0);
+    CHECK (fetHigh > fetLow + 5.0 && fetHigh > 5.0, "FET excess H3: %.1f dB (low GR) -> %.1f dB (high GR)", fetLow, fetHigh);
+    // opto is clean: no model distortion beyond the VCA reference
+    const double optoHigh = harmonic (AnalogModel::opto, -26.0, 2000.0) - harmonic (AnalogModel::vca, -26.0, 2000.0);
+    CHECK (std::abs (optoHigh) < 1.0, "opto excess H2 %.1f dB", optoHigh);
+}
+
+TEST (analogModelsFeedbackStress)
+{
+    // Each model inside the zero-delay feedback loop, with hold and auto release, extreme
+    // settings and wild input: finite output, bounded solver work.
+    const double fs = 48000.0;
+    for (auto m : kAllModels)
+    {
+        CompressorParams p = modelParams (m);
+        p.topology = Topology::feedBack;
+        p.ratio = 20.0;
+        p.attackMs = 0.01;
+        p.releaseMs = 10.0;
+        p.holdMs = 5.0;
+        p.autoRelease = true;
+        p.detection = DetectionMode::peak;
+        auto e = makeEngine (fs, p);
+        std::mt19937 rng (static_cast<unsigned> (m) + 40);
+        std::uniform_real_distribution<double> u (-1.0, 1.0);
+        Stereo s (48000);
+        for (size_t i = 0; i < s.size(); ++i)
+        {
+            const double a = (i / 3000) % 3 == 0 ? 8.0 : ((i / 3000) % 3 == 1 ? 0.0 : 1e-6);
+            s.l[i] = a * u (rng);
+            s.r[i] = (i % 700 < 350) ? a : -a;
+        }
+        run (*e, s);
+        bool finite = true;
+        for (size_t i = 0; i < s.size(); ++i)
+            finite = finite && std::isfinite (s.l[i]) && std::isfinite (s.r[i]);
+        CHECK (finite, "model %d: non-finite output", (int) m);
+        CHECK (e->getAverageSolverEvaluations() < 8.0, "model %d: solver average %.2f", (int) m, e->getAverageSolverEvaluations());
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 int main()
 {

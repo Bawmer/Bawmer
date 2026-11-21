@@ -13,6 +13,31 @@ namespace lumen
 enum class DetectionMode { peak = 0, rms = 1, hybrid = 2, truePeak = 3 };
 enum class AutoReleaseShape { smooth = 0, program = 1, fast = 2 };
 
+/** Behavioural archetypes of analog gain-control families (Analog / Hybrid modes). These model
+    widely documented behaviour — timing, knee shape and how distortion relates to gain reduction —
+    not any specific circuit or product:
+      vca    : precise, program-dependent attack, dual release (the default analog behaviour)
+      opto   : slow, soft attack; two-stage release whose tail depends on how long the cell has
+               been lit ("light memory"); very soft knee; clean
+      variMu : ratio rises gradually with level (very wide knee), smooth timing; even-order
+               distortion that grows with gain reduction
+      fet    : very fast, sharp onset; knee as set; odd-order distortion that grows with gain
+               reduction */
+enum class AnalogModel { vca = 0, opto = 1, variMu = 2, fet = 3 };
+
+/** Minimum knee each model imposes on the user knee (dB) — part of its static character. */
+inline double analogModelKnee (AnalogModel m, double kneeDb) noexcept
+{
+    switch (m)
+    {
+        case AnalogModel::vca:    return std::max (kneeDb, 6.0);
+        case AnalogModel::opto:   return std::max (kneeDb, 12.0);
+        case AnalogModel::variMu: return std::max (kneeDb, 18.0);
+        case AnalogModel::fet:    return kneeDb;
+    }
+    return kneeDb;
+}
+
 /** Converts a (sidechain-filtered) sample into a level in dB.
     RMS is AES-17 calibrated (+3.01 dB) so a steady sine reads the same in peak and RMS modes,
     which keeps the threshold meaning identical when the user switches detectors.
@@ -146,6 +171,7 @@ struct BallisticsSettings
     bool autoRelease = false;
     AutoReleaseShape shape = AutoReleaseShape::program;
     double holdMs = 0.0;
+    AnalogModel model = AnalogModel::vca; // analog envelope only
 };
 
 /** Auto-release shapes. All are dual-envelope designs (fast branch + slow branch, output = max);
@@ -305,6 +331,7 @@ public:
     struct State
     {
         double fast = 0.0, slow = 0.0, rc = 0.0;
+        double combined = 0.0; // output before the RC stage
         int hold = 0;
     };
 
@@ -337,10 +364,30 @@ public:
             const double cd = timeConstantToCoeff (ms, fs);
             return loopGain > 0.0 ? cd * (1.0 + loopGain) / (1.0 + cd * loopGain) : cd;
         };
+        // Per-model timing character.
+        double attackMul = 1.0, rcMs = 0.35, fastReleaseFactor = 0.25;
+        switch (s.model)
+        {
+            case AnalogModel::vca:                                                       break;
+            case AnalogModel::opto:   attackMul = 2.0;  rcMs = 1.5;  fastReleaseFactor = 0.15; break;
+            case AnalogModel::variMu: attackMul = 1.5;  rcMs = 2.0;  fastReleaseFactor = 0.35; break;
+            case AnalogModel::fet:    attackMul = 0.25; rcMs = 0.05; fastReleaseFactor = 0.15; break;
+        }
+        model = s.model;
         // The RC rounding pole is *not* pre-warped: inside a loop of gain k it must stay much
-        // faster than the envelope pole, or the pair becomes underdamped (ringing gain).
-        rcCoeff = timeConstantToCoeff (0.35, fs);
-        if (s.autoRelease)
+        // faster than the envelope pole, or the pair becomes underdamped (ringing gain). It is
+        // also kept outside the zero-delay loop (see peekBeforeRc).
+        rcCoeff = timeConstantToCoeff (rcMs, fs);
+        if (s.model == AnalogModel::opto)
+        {
+            // fast branch = the cell's quick response; slow branch = light memory: it charges
+            // over ~1.5 s of compression and decays with the release time, stretched by up to 4x
+            // in proportion to how much light it has stored (see evaluate()).
+            fastReleaseCoeff = c (std::max (15.0, s.releaseMs * fastReleaseFactor) * m);
+            slowAttackCoeff = c (1500.0);
+            slowReleaseCoeff = c (s.releaseMs * m);
+        }
+        else if (s.autoRelease)
         {
             const auto t = ReleaseShapeTable::get (s.shape);
             fastReleaseCoeff = c (std::max (std::max (8.0, t.fastReleaseMinMs), s.releaseMs * t.fastReleaseFactor) * m);
@@ -349,15 +396,18 @@ public:
         }
         else
         {
-            fastReleaseCoeff = c (std::max (8.0, s.releaseMs * 0.25));
+            fastReleaseCoeff = c (std::max (8.0, s.releaseMs * fastReleaseFactor));
             slowAttackCoeff = c (std::max (120.0, s.releaseMs * 0.6));
             slowReleaseCoeff = c (s.releaseMs);
         }
         // attack endpoints are kept as *closed-loop* (desired) coefficients: the program-dependent
         // interpolation happens there, and the result is pre-warped per sample (the warp is
         // nonlinear, so warping the endpoints and interpolating would not give the same timing)
-        attackCoeffSlow = timeConstantToCoeff (s.attackMs * 3.0, fs);
-        attackCoeffFast = timeConstantToCoeff (s.attackMs * 0.5, fs);
+        const double att = std::max (0.01, s.attackMs * attackMul);
+        attackCoeffSlow = timeConstantToCoeff (att * 3.0, fs);
+        attackCoeffFast = timeConstantToCoeff (att * 0.5, fs);
+        if (s.model == AnalogModel::fet) // FET: no gentle start — always the fast end
+            attackCoeffSlow = attackCoeffFast;
         loopK = std::max (0.0, loopGain);
     }
 
@@ -389,9 +439,32 @@ public:
             out.fast = fastReleaseCoeff * in.fast + (1.0 - fastReleaseCoeff) * target;
             out.hold = 0;
         }
-        const double cs = out.fast > in.slow ? slowAttackCoeff : slowReleaseCoeff;
-        out.slow = cs * in.slow + (1.0 - cs) * out.fast;
-        out.rc = rcCoeff * in.rc + (1.0 - rcCoeff) * std::max (out.fast, out.slow);
+        double combined;
+        if (model == AnalogModel::opto)
+        {
+            // light memory: decay slows down the more light is stored (mf up to 3 -> 4x longer).
+            // 1 - c is small, so c' = 1 - (1 - c)/(1 + mf) is an accurate, exp-free way to
+            // stretch the time constant by (1 + mf).
+            double cs = slowAttackCoeff;
+            if (out.fast <= in.slow)
+            {
+                const double mf = std::min (3.0, in.slow / 6.0);
+                cs = 1.0 - (1.0 - slowReleaseCoeff) / (1.0 + mf);
+            }
+            out.slow = cs * in.slow + (1.0 - cs) * out.fast;
+            // two-stage release: the fast branch drops quickly, then the output rides on half
+            // the stored light, which fades slowly. In steady state slow -> fast, so the static
+            // curve is unchanged.
+            combined = std::max (out.fast, 0.5 * out.slow);
+        }
+        else
+        {
+            const double cs = out.fast > in.slow ? slowAttackCoeff : slowReleaseCoeff;
+            out.slow = cs * in.slow + (1.0 - cs) * out.fast;
+            combined = std::max (out.fast, out.slow);
+        }
+        out.rc = rcCoeff * in.rc + (1.0 - rcCoeff) * combined;
+        out.combined = combined;
         return out.rc;
     }
 
@@ -409,10 +482,10 @@ public:
     {
         State tmp;
         evaluate (target, state, tmp);
-        return std::max (tmp.fast, tmp.slow);
+        return tmp.combined;
     }
 
-    double getOutputBeforeRc() const noexcept { return std::max (state.fast, state.slow); }
+    double getOutputBeforeRc() const noexcept { return state.combined; }
 
     inline double process (double target) noexcept
     {
@@ -421,6 +494,7 @@ public:
         state.fast = flushDenormal (next.fast);
         state.slow = flushDenormal (next.slow);
         state.rc = flushDenormal (next.rc);
+        state.combined = next.combined;
         state.hold = next.hold;
         return r;
     }
@@ -429,6 +503,7 @@ public:
 
 private:
     double fs = 48000.0, overshootScale = 1.0, loopK = 0.0, releaseScale = 1.0;
+    AnalogModel model = AnalogModel::vca;
     BallisticsSettings settings;
     int holdSamples = 0;
     double attackCoeffSlow = 0.0, attackCoeffFast = 0.0;

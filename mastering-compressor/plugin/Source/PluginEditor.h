@@ -88,7 +88,7 @@ private:
     Toggle scHpfOn, scLpfOn, extSc, autoGain;
     Choice detection, channelMode, releaseMode;
     // analog / hybrid
-    Choice topology;
+    Choice analogModel, topology;
     Knob blend, drive, character, colorMix;
     Toggle transformer, amplifier;
 

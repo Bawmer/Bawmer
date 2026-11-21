@@ -92,10 +92,10 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
       autoGain (state, ids::autoGain, "AUTO GAIN", true),
       detection (state, ids::detection, "DETECTION"), channelMode (state, ids::channelMode, "CHANNELS"),
       releaseMode (state, ids::releaseMode, "RELEASE MODE"),
-      topology (state, ids::topology, "TOPOLOGY"), blend (state, ids::blend, "HYBRID BLEND"),
+      analogModel (state, ids::analogModel, "ANALOG MODEL"), topology (state, ids::topology, "TOPOLOGY"), blend (state, ids::blend, "HYBRID BLEND"),
       drive (state, ids::drive, "DRIVE"), character (state, ids::character, "CHARACTER"),
       colorMix (state, ids::colorMix, "COLOUR MIX"),
-      transformer (state, ids::transformer, "TRANSFORMER"), amplifier (state, ids::amplifier, "AMPLIFIER")
+      transformer (state, ids::transformer, "XFORMER"), amplifier (state, ids::amplifier, "AMP")
 {
     const char* modeNames[] = { "ULTRA", "DIGITAL", "ANALOG", "HYBRID" };
     const char* modeTips[] = { "Ultra Transparent: no colouration, minimum processing, extra-smooth gain",
@@ -170,12 +170,15 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
     extSc.button.setTooltip ("Use the external sidechain input for detection");
     releaseMode.box.setTooltip ("Manual: one release time. Auto: dual-envelope release that adapts to duration, depth "
                                 "and crest factor (Smooth = gentle adaptation, Program = widest, Fast = quickest recovery)");
+    analogModel.box.setTooltip ("Behavioural archetypes: VCA precise; Opto slow, two-stage release with memory, clean; "
+                                "Vari-Mu ratio rises with level, 2nd harmonic grows with compression (AMP on); "
+                                "FET very fast, 3rd harmonic grows with compression (AMP on)");
     hold.slider.setTooltip ("Suspends release after each peak. >= 1/(2f) removes ripple at frequency f (17 ms for 30 Hz)");
     autoGain.button.setTooltip ("Automatic makeup gain from the long-term average gain reduction");
 
     lookaheadMode.box.setTooltip ("Exact: gain reduction is complete when a transient arrives (proven zero overshoot). "
                                   "Classic: lookahead only starts the attack earlier.");
-    for (auto* c : { &oversampling, &osQuality, &lookaheadMode, &detection, &channelMode, &releaseMode, &topology })
+    for (auto* c : { &oversampling, &osQuality, &lookaheadMode, &detection, &channelMode, &releaseMode, &analogModel, &topology })
         c->addTo (*this);
 
     infoLabel.setFont (uiFont (11.5f));
@@ -243,6 +246,7 @@ void MainPanel::updateEnablement()
     const bool analogish = mode >= 2;
     const bool colourOn = analogish && (transformer.button.getToggleState() || amplifier.button.getToggleState());
     topology.box.setEnabled (analogish && ! extSc.button.getToggleState());
+    analogModel.box.setEnabled (analogish);
     blend.setEnabled (mode == 3);
     drive.setEnabled (colourOn);
     character.setEnabled (colourOn && amplifier.button.getToggleState());
@@ -279,7 +283,9 @@ void MainPanel::refresh()
     const int mode = juce::roundToInt (state.getRawParameterValue (ids::mode)->load());
     const double kneeDb = state.getRawParameterValue (ids::knee)->load();
     curve.setCurve (state.getRawParameterValue (ids::threshold)->load(), state.getRawParameterValue (ids::ratio)->load(),
-                    mode == 2 ? CompressorEngine::analogKnee (kneeDb) : kneeDb,
+                    mode == 2 ? CompressorEngine::analogKnee (kneeDb, static_cast<AnalogModel> (juce::roundToInt (
+                                                                         state.getRawParameterValue (ids::analogModel)->load())))
+                              : kneeDb,
                     state.getRawParameterValue (ids::makeup)->load() + m.autoGainDb.load());
     curve.setOperatingPoint (det, juce::jmax (grA, grB));
 
@@ -440,12 +446,15 @@ void MainPanel::resized()
     }
     {
         auto r = analogSection.reduced (12, 8).withTrimmedTop (16);
-        auto col = r.removeFromLeft (130);
-        topology.setBounds (col.removeFromTop (44));
-        col.removeFromTop (10);
-        transformer.button.setBounds (col.removeFromTop (26));
+        auto col = r.removeFromLeft (176);
+        analogModel.setBounds (col.removeFromTop (40));
+        col.removeFromTop (4);
+        topology.setBounds (col.removeFromTop (40));
         col.removeFromTop (8);
-        amplifier.button.setBounds (col.removeFromTop (26));
+        auto toggles = col.removeFromTop (26);
+        transformer.button.setBounds (toggles.removeFromLeft (toggles.getWidth() / 2 - 2));
+        toggles.removeFromLeft (4);
+        amplifier.button.setBounds (toggles);
         r.removeFromLeft (8);
         const int w = r.getWidth() / 4;
         for (auto* k : { &blend, &drive, &character, &colorMix })
