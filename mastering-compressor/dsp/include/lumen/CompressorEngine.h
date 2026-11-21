@@ -20,14 +20,17 @@
 #include "ColorStage.h"
 #include "DspCommon.h"
 #include "Envelope.h"
+#include "FeedbackSolver.h"
 #include "Filters.h"
 #include "GainComputer.h"
+#include "Lookahead.h"
 
 namespace lumen
 {
 enum class EngineMode { ultraTransparent = 0, digital = 1, analog = 2, hybrid = 3 };
 enum class ChannelMode { stereo = 0, dualMono = 1, midSide = 2 };
 enum class Topology { feedForward = 0, feedBack = 1 };
+enum class LookaheadMode { exact = 0, classic = 1 };
 
 struct CompressorParams
 {
@@ -47,6 +50,7 @@ struct CompressorParams
     bool autoRelease = false;
     bool autoGain = false;
     double lookaheadMs = 0.0;    // 0..20
+    LookaheadMode lookaheadMode = LookaheadMode::exact; // exact: zero overshoot at the onset
     DetectionMode detection = DetectionMode::peak;
     bool externalSidechain = false;
     ChannelMode channelMode = ChannelMode::stereo;
@@ -140,18 +144,17 @@ public:
             tilt[ch].reset();
             laDelay[ch].clear();
             dryDelay[ch].clear();
-            laMaxD[ch].reset();
-            laMaxA[ch].reset();
+            laShapeD[ch].reset();
+            laShapeA[ch].reset();
             kIn[ch].reset();
             kOut[ch].reset();
-            fbPrev[ch] = 0.0;
             antiMod[ch] = 0.0;
         }
         colour.reset();
         avgReduction = 0.0;
         autoGainS.value = autoGainS.target = 0.0;
         msIn = msOut = 0.0;
-        applyDelays();
+        applyDelays (true);
     }
 
     /** Call at the start of each block (audio thread). Cheap unless timing parameters change. */
@@ -159,6 +162,7 @@ public:
     {
         const bool structural = firstParams
                                 || p.lookaheadMs != params.lookaheadMs
+                                || p.lookaheadMode != params.lookaheadMode
                                 || p.oversamplingLog2 != params.oversamplingLog2
                                 || p.oversamplingQuality != params.oversamplingQuality
                                 || p.mode != params.mode
@@ -167,7 +171,7 @@ public:
         const bool timing = firstParams || structural
                             || p.attackMs != params.attackMs || p.releaseMs != params.releaseMs
                             || p.autoRelease != params.autoRelease || p.ratio != params.ratio
-                            || p.topology != params.topology;
+                            || p.topology != params.topology || p.externalSidechain != params.externalSidechain;
         const bool scFilters = firstParams || p.scHpfHz != params.scHpfHz || p.scLpfHz != params.scLpfHz
                                || p.scHpfOn != params.scHpfOn || p.scLpfOn != params.scLpfOn;
 
@@ -215,7 +219,7 @@ public:
         if (structural)
         {
             colour.configureOversampling (params.oversamplingLog2, params.oversamplingQuality);
-            applyDelays();
+            applyDelays (firstParams);
         }
 
         if (timing)
@@ -296,17 +300,40 @@ private:
         return usesAnalogPath() && params.topology == Topology::feedBack && ! params.externalSidechain;
     }
 
-    void applyDelays() noexcept
+    /** immediate = true on prepare/reset; otherwise delay changes crossfade over 20 ms. */
+    void applyDelays (bool immediate = false) noexcept
     {
         lookaheadSamples = clampValue (static_cast<int> (std::lround (params.lookaheadMs * 0.001 * sampleRate)),
                                        0, kMaxLookaheadSamples - 1);
         const int total = getLatencySamples();
+        const int fade = std::max (1, static_cast<int> (std::lround (0.02 * sampleRate)));
         for (int ch = 0; ch < kMaxChannels; ++ch)
         {
-            laDelay[ch].setDelay (lookaheadSamples);
-            dryDelay[ch].setDelay (total);
-            laMaxD[ch].setWindow (lookaheadSamples + 1);
-            laMaxA[ch].setWindow (lookaheadSamples + 1);
+            laDelay[ch].setFadeLength (fade);
+            dryDelay[ch].setFadeLength (fade);
+            laDelay[ch].setDelay (lookaheadSamples, immediate);
+            dryDelay[ch].setDelay (total, immediate);
+        }
+        configureLookaheadShapers (true);
+    }
+
+    /** Exact mode: kernel length from the attack time. The triangular kernel's step response
+        reaches 63 % at ~0.59·W, so W = 1.7·attack keeps the attack control meaningful; it is
+        capped at L + 1, the longest kernel for which the zero-overshoot guarantee holds. */
+    void configureLookaheadShapers (bool force) noexcept
+    {
+        const bool exact = params.lookaheadMode == LookaheadMode::exact;
+        const int kernel = clampValue (static_cast<int> (std::lround (1.7 * params.attackMs * 0.001 * sampleRate)),
+                                       1, lookaheadSamples + 1);
+        if (! force && kernel == shaperKernel && exact == shaperExact && lookaheadSamples == shaperLookahead)
+            return;
+        shaperKernel = kernel;
+        shaperExact = exact;
+        shaperLookahead = lookaheadSamples;
+        for (int ch = 0; ch < kMaxChannels; ++ch)
+        {
+            laShapeD[ch].configure (lookaheadSamples, kernel, exact);
+            laShapeA[ch].configure (lookaheadSamples, kernel, exact);
         }
     }
 
@@ -317,19 +344,16 @@ private:
         b.releaseMs = params.releaseMs;
         b.autoRelease = params.autoRelease;
 
-        // Feedback loop stability: the linearised loop  e[n] = (a - k(1 - a)) e[n-1] + ...
-        // with k = R - 1 is stable for a > (k - 1) / (k + 1). Use k / (k + 1) for margin.
-        double minCoeff = 0.0;
-        if (feedback())
-        {
-            const double k = params.ratio - 1.0;
-            minCoeff = k / (k + 1.0);
-        }
+        // Feedback runs as a zero-delay loop (FeedbackSolver.h), which is stable for any
+        // coefficient; the analog envelope pre-warps its coefficients by the loop gain k = R - 1
+        // so attack/release times mean the same in FB as in FF.
+        const double loopGain = feedback() ? params.ratio - 1.0 : 0.0;
         for (int ch = 0; ch < kMaxChannels; ++ch)
         {
             envDigital[ch].configure (b);
-            envAnalog[ch].configure (b, minCoeff);
+            envAnalog[ch].configure (b, loopGain);
         }
+        configureLookaheadShapers (false);
         // Ultra Transparent: an extra pole on the gain trajectory rounds off corners of the
         // one-pole envelope, which lowers gain-modulation sidebands (less audible distortion).
         antiModCoeff = timeConstantToCoeff (clampValue (params.attackMs * 0.25, 0.02, 0.5), sampleRate);
@@ -359,6 +383,7 @@ private:
         const EngineMode mode = params.mode;
         const bool hpOn = params.scHpfOn, lpOn = params.scLpfOn;
         const DetectionMode det = params.detection;
+        const bool exactLA = params.lookaheadMode == LookaheadMode::exact && lookaheadSamples > 0;
 
         for (int ch = 0; ch < kMaxChannels; ++ch)
         {
@@ -417,9 +442,11 @@ private:
             }
 
             double r[2] = { 0.0, 0.0 };
+            double delayed[2] = { 0.0, 0.0 };
             const int procCh = stereo ? 2 : 1;
             for (int ch = 0; ch < procCh; ++ch)
             {
+                delayed[ch] = laDelay[ch].process (p[ch]);
                 double rD = 0.0, rA = 0.0;
                 if (useD)
                 {
@@ -429,32 +456,34 @@ private:
                     const double level = detDigital[ch].process (d);
                     meters.detectorLevelDb = std::max (meters.detectorLevelDb, level);
                     const double target = -GainComputer::feedForward (level, thr, ratio, knee);
-                    rD = envDigital[ch].process (laMaxD[ch].process (target));
+                    const double shaped = laShapeD[ch].process (target);
+                    rD = envDigital[ch].process (shaped);
                     if (ultra)
                     {
                         antiMod[ch] = flushDenormal (antiModCoeff * antiMod[ch] + (1.0 - antiModCoeff) * rD);
                         rD = antiMod[ch];
                     }
+                    if (exactLA)
+                        rD = std::max (rD, shaped); // ballistics may only add reduction
                 }
-                if (useA)
+                if (useA && fb)
                 {
-                    double d = fb ? fbPrev[ch] : s[ch];
+                    rA = solveFeedback (ch, delayed[ch], mode == EngineMode::hybrid ? rD : 0.0,
+                                        mode == EngineMode::hybrid ? blend : 1.0, thr, ratio, kneeA, hpOn, lpOn);
+                }
+                else if (useA)
+                {
+                    double d = s[ch];
                     if (hpOn) d = hpfA[ch].process (d);
                     if (lpOn) d = lpfA[ch].process (d);
                     d = tilt[ch].process (d);
                     const double level = detAnalog[ch].process (d);
-                    double target;
-                    if (fb)
-                    {
-                        target = -GainComputer::feedBack (level, thr, ratio, kneeA);
-                    }
-                    else
-                    {
-                        target = laMaxA[ch].process (-GainComputer::feedForward (level, thr, ratio, kneeA));
-                        if (! useD)
-                            meters.detectorLevelDb = std::max (meters.detectorLevelDb, level);
-                    }
-                    rA = envAnalog[ch].process (target);
+                    const double shaped = laShapeA[ch].process (-GainComputer::feedForward (level, thr, ratio, kneeA));
+                    if (! useD)
+                        meters.detectorLevelDb = std::max (meters.detectorLevelDb, level);
+                    rA = envAnalog[ch].process (shaped);
+                    if (exactLA)
+                        rA = std::max (rA, shaped);
                 }
 
                 switch (mode)
@@ -475,10 +504,8 @@ private:
 
             for (int ch = 0; ch < procCh; ++ch)
             {
-                const double delayed = laDelay[ch].process (p[ch]);
                 const double g = r[ch] == 0.0 ? 1.0 : std::exp (-r[ch] * kLn10Over20);
-                p[ch] = delayed * g;
-                fbPrev[ch] = p[ch];
+                p[ch] = delayed[ch] * g;
                 meters.gainReductionDb[ch] = std::max (meters.gainReductionDb[ch], r[ch]);
                 avgReductionAccum += r[ch];
             }
@@ -563,6 +590,50 @@ private:
         }
     }
 
+    /** Zero-delay feedback: solve r = H(r) for this sample (see FeedbackSolver.h), then commit
+        the detector chain and envelope with the converged output. The loop is closed around the
+        envelope before its RC rounding stage (see AnalogEnvelope::peekBeforeRc); the returned,
+        applied reduction includes the RC stage.
+        u: delayed input sample; the output is u·10^(-(r0 + w·r)/20). */
+    double solveFeedback (int ch, double u, double rD, double w, double thr, double ratio, double kneeDb, bool hpOn,
+                          bool lpOn) noexcept
+    {
+        const double r0 = rD * (1.0 - w);
+        auto chainPeek = [&] (double y) {
+            double d = y;
+            if (hpOn) d = hpfA[ch].peek (d);
+            if (lpOn) d = lpfA[ch].peek (d);
+            return tilt[ch].peek (d);
+        };
+        // The sidechain chain is linear: d = A·y + B
+        const double B = chainPeek (0.0);
+        const double A = chainPeek (1.0) - B;
+        auto output = [&] (double r) { return u * std::exp (-(r0 + w * r) * kLn10Over20); };
+        auto H = [&] (double r) {
+            const double level = detAnalog[ch].peek (A * output (r) + B);
+            return envAnalog[ch].peekBeforeRc (-GainComputer::feedBack (level, thr, ratio, kneeDb));
+        };
+        const auto res = FeedbackSolver::solve (H, envAnalog[ch].getOutputBeforeRc());
+        zdfSolves += 1;
+        zdfEvaluations += res.evaluations;
+
+        // commit state with the solution
+        double d = output (res.r);
+        if (hpOn) d = hpfA[ch].process (d);
+        if (lpOn) d = lpfA[ch].process (d);
+        d = tilt[ch].process (d);
+        const double level = detAnalog[ch].process (d);
+        return envAnalog[ch].process (-GainComputer::feedBack (level, thr, ratio, kneeDb));
+    }
+
+public:
+    /** Average number of loop evaluations per zero-delay feedback solve (diagnostics). */
+    double getAverageSolverEvaluations() const noexcept
+    {
+        return zdfSolves > 0 ? static_cast<double> (zdfEvaluations) / static_cast<double> (zdfSolves) : 0.0;
+    }
+
+private:
     /** Gain applied to the dry signal while bypassed so it matches the processed loudness. */
     double loudnessMatchGain() const noexcept
     {
@@ -584,9 +655,12 @@ private:
     AnalogEnvelope envAnalog[kMaxChannels];
     Svf hpfD[kMaxChannels], lpfD[kMaxChannels], hpfA[kMaxChannels], lpfA[kMaxChannels];
     DetectorTilt tilt[kMaxChannels];
-    DelayLine<kMaxLookaheadSamples> laDelay[kMaxChannels];
-    DelayLine<kMaxDelay> dryDelay[kMaxChannels];
-    SlidingMax<kMaxLookaheadSamples> laMaxD[kMaxChannels], laMaxA[kMaxChannels];
+    CrossfadingDelay<kMaxLookaheadSamples> laDelay[kMaxChannels];
+    CrossfadingDelay<kMaxDelay> dryDelay[kMaxChannels];
+    LookaheadShaper<kMaxLookaheadSamples> laShapeD[kMaxChannels], laShapeA[kMaxChannels];
+    int shaperKernel = -1, shaperLookahead = -1;
+    bool shaperExact = false;
+    long long zdfSolves = 0, zdfEvaluations = 0;
     KWeighting kIn[kMaxChannels], kOut[kMaxChannels];
     ColorStage<kMaxChannels> colour;
 
@@ -604,7 +678,6 @@ private:
         }
     } autoGainS;
 
-    double fbPrev[kMaxChannels] {};
     double antiMod[kMaxChannels] {};
     double antiModCoeff = 0.0;
     double avgReduction = 0.0, avgReductionAccum = 0.0, autoGainCoeff = 0.0;

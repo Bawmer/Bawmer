@@ -71,7 +71,7 @@ private:
 
     // strip
     Toggle bypass, matchBypass;
-    Choice oversampling, osQuality;
+    Choice oversampling, osQuality, lookaheadMode;
     juce::Label infoLabel;
 
     // displays

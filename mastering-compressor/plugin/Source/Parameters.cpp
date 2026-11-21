@@ -61,6 +61,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (std::make_unique<APB> (juce::ParameterID { ids::autoRelease, 1 }, "Auto Release", false));
     layout.add (std::make_unique<APB> (juce::ParameterID { ids::autoGain, 1 }, "Auto Gain", false));
     layout.add (floatParam (ids::lookahead, "Lookahead", { 0.0f, 20.0f, 0.01f }, 0.0f, fmtMs, "ms"));
+    layout.add (std::make_unique<APC> (juce::ParameterID { ids::lookaheadMode, 1 }, "Lookahead Mode",
+                                       juce::StringArray { "Exact (no overshoot)", "Classic (early attack)" }, 0));
     layout.add (std::make_unique<APC> (juce::ParameterID { ids::detection, 1 }, "Detection",
                                        juce::StringArray { "Peak", "RMS", "Hybrid" }, 1));
     layout.add (std::make_unique<APB> (juce::ParameterID { ids::extSc, 1 }, "External Sidechain", false));
@@ -103,6 +105,7 @@ ParameterReader::ParameterReader (juce::AudioProcessorValueTreeState& s)
     autoRelease = get (s, ids::autoRelease);
     autoGain = get (s, ids::autoGain);
     lookahead = get (s, ids::lookahead);
+    lookaheadMode = get (s, ids::lookaheadMode);
     detection = get (s, ids::detection);
     extSc = get (s, ids::extSc);
     channelMode = get (s, ids::channelMode);
@@ -149,6 +152,7 @@ CompressorParams ParameterReader::read() const noexcept
     p.autoRelease = b (autoRelease);
     p.autoGain = b (autoGain);
     p.lookaheadMs = f (lookahead);
+    p.lookaheadMode = static_cast<LookaheadMode> (juce::jlimit (0, 1, i (lookaheadMode)));
     p.detection = static_cast<DetectionMode> (juce::jlimit (0, 2, i (detection)));
     p.externalSidechain = b (extSc);
     p.channelMode = static_cast<ChannelMode> (juce::jlimit (0, 2, i (channelMode)));

@@ -193,24 +193,31 @@ TEST (transferCurveSoftKneeContinuity)
 
 TEST (feedbackCurveMatchesFeedForward)
 {
-    // Closed-loop fixed point of the feedback computer must equal the feed-forward curve.
-    for (double ratio : { 2.0, 4.0, 8.0 })
-        for (double kneeDb : { 0.0, 6.0 })
-            for (double in = -40.0; in <= 0.0; in += 2.0)
+    // Closed-loop fixed point of the feedback law must equal the feed-forward curve at *every*
+    // level, including inside the soft knee (where a naive -(R-1)·overshoot law is wrong).
+    for (double ratio : { 1.0, 1.5, 2.0, 4.0, 8.0, 20.0 })
+        for (double kneeDb : { 0.0, 1.0, 6.0, 24.0 })
+            for (double in = -60.0; in <= 0.0; in += 0.25)
             {
-                // solve y = in + G_fb(y) by bisection
-                double lo = -200.0, hi = in;
+                // solve y = in + G_fb(y) by bisection (y - in - G_fb(y) is increasing in y)
+                double lo = -300.0, hi = in;
                 for (int it = 0; it < 200; ++it)
                 {
                     const double mid = 0.5 * (lo + hi);
                     (mid - in - GainComputer::feedBack (mid, -20.0, ratio, kneeDb) > 0.0 ? hi : lo) = mid;
                 }
-                const double y = 0.5 * (lo + hi);
-                if (kneeDb == 0.0)
-                    CHECK_NEAR (y, GainComputer::staticOutput (in, -20.0, ratio, 0.0), 1e-9);
-                else // soft knee: identical outside the knee region
-                    if (in < -20.0 - 3.0 * ratio || in > -20.0 + 3.0 * ratio)
-                        CHECK_NEAR (y, GainComputer::staticOutput (in, -20.0, ratio, 0.0), 1e-9);
+                CHECK_NEAR (0.5 * (lo + hi), GainComputer::staticOutput (in, -20.0, ratio, kneeDb), 1e-9);
+            }
+}
+
+TEST (inverseStaticCurveRoundTrip)
+{
+    for (double ratio : { 1.0, 1.01, 3.0, 20.0 })
+        for (double kneeDb : { 0.0, 0.5, 12.0, 24.0 })
+            for (double in = -60.0; in <= 0.0; in += 0.1)
+            {
+                const double out = GainComputer::staticOutput (in, -24.0, ratio, kneeDb);
+                CHECK_NEAR (GainComputer::inverseStaticOutput (out, -24.0, ratio, kneeDb), in, 1e-9);
             }
 }
 
@@ -809,6 +816,281 @@ TEST (stabilityAcrossSampleRates)
             const double tol = (mode == EngineMode::analog || mode == EngineMode::hybrid) ? 1.0 : 0.15;
             CHECK_NEAR (outDb, -6.0206 - 10.5 + 0.0, tol);
         }
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// 12. exact-onset lookahead
+TEST (lookaheadShaperGuarantee)
+{
+    // Property test of the shaper alone: s[n] >= t[n - L] for random targets, lookaheads and
+    // kernel lengths (the proof in Lookahead.h).
+    std::mt19937 rng (5);
+    std::uniform_real_distribution<double> u (0.0, 1.0);
+    for (int trial = 0; trial < 40; ++trial)
+    {
+        const int L = 1 + static_cast<int> (u (rng) * 900);
+        const int W = 1 + static_cast<int> (u (rng) * (L + 1));
+        auto shaper = std::make_unique<LookaheadShaper<1024>>();
+        shaper->configure (L, W, true);
+        std::vector<double> t (20000);
+        for (auto& v : t)
+            v = u (rng) < 0.01 ? 40.0 * u (rng) : (u (rng) < 0.5 ? 0.0 : 3.0 * u (rng));
+        double worst = 0.0;
+        for (size_t n = 0; n < t.size(); ++n)
+        {
+            const double sOut = shaper->process (t[n]);
+            if (n >= static_cast<size_t> (L))
+                worst = std::max (worst, t[n - static_cast<size_t> (L)] - sOut);
+        }
+        CHECK (worst <= 1e-12, "L %d W %d: under-shoot %.3g dB", L, W, worst);
+    }
+}
+
+TEST (exactLookaheadZeroOvershoot)
+{
+    // 0.5 ms bursts at 0 dBFS over a quiet bed, 20:1, peak detection: in Exact mode no output
+    // sample may exceed the static curve of the input sample it came from — in every engine mode,
+    // linked stereo, with attack shorter or longer than the lookahead.
+    const double fs = 48000.0;
+    for (auto mode : { EngineMode::ultraTransparent, EngineMode::digital, EngineMode::analog, EngineMode::hybrid })
+        for (double att : { 1.0, 10.0 })
+            for (double la : { 1.0, 5.0, 20.0 })
+            {
+                CompressorParams p = transparentDefaults();
+                p.mode = mode;
+                p.transformer = p.amplifier = false;
+                p.thresholdDb = -20.0;
+                p.ratio = 20.0;
+                p.attackMs = att;
+                p.releaseMs = 50.0;
+                p.detection = DetectionMode::peak;
+                p.lookaheadMs = la;
+                p.lookaheadMode = LookaheadMode::exact;
+                auto e = makeEngine (fs, p);
+                const size_t n = static_cast<size_t> (fs);
+                Stereo s (n);
+                for (size_t i = 0; i < n; ++i)
+                {
+                    double v = 0.01 * std::sin (2.0 * kPi * 300.0 * i / fs);
+                    if (i % 4800 < 24)
+                        v += std::sin (2.0 * kPi * 5000.0 * i / fs);
+                    s.l[i] = v;
+                    s.r[i] = 0.7 * v;
+                }
+                const Stereo in = s;
+                run (*e, s);
+                const size_t L = static_cast<size_t> (e->getLatencySamples());
+                double worst = -1e9;
+                for (size_t i = L + 4800; i < n; ++i)
+                {
+                    const double x = std::abs (in.l[i - L]);
+                    if (x < 1e-4)
+                        continue;
+                    // Reference: the static curve of the input sample (analog mode uses its
+                    // minimum 6 dB knee). The analog detector tilt adds +1.5 dB of sensitivity at
+                    // 5 kHz, which only increases reduction, so it cannot hide an overshoot.
+                    const double kneeDb = mode == EngineMode::analog ? CompressorEngine::analogKnee (0.0) : 0.0;
+                    const double xd = 20.0 * std::log10 (x);
+                    const double allowed = GainComputer::staticOutput (xd, -20.0, 20.0, kneeDb);
+                    worst = std::max (worst, 20.0 * std::log10 (std::abs (s.l[i]) + 1e-300) - allowed);
+                }
+                CHECK (worst <= 1e-6, "mode %d att %.0f la %.0f: overshoot %.3f dB", (int) mode, att, la, worst);
+            }
+}
+
+TEST (lookaheadChangeIsClickFree)
+{
+    // Changing the lookahead (and therefore the delay) while audio runs must crossfade, not jump.
+    const double fs = 48000.0;
+    CompressorParams p = transparentDefaults();
+    p.thresholdDb = 0.0; // no gain reduction: isolates the delay change
+    auto e = makeEngine (fs, p, 256);
+    Stereo s = sine (fs, 200.0, 0.5, static_cast<size_t> (fs * 2));
+    const double inputCurv = 0.5 * std::pow (2.0 * kPi * 200.0 / fs, 2.0);
+    const double lookaheads[] = { 0.0, 7.3, 20.0, 1.1, 13.0, 0.0, 5.0, 19.0 };
+    for (size_t pos = 0, k = 0; pos < s.size(); pos += 256)
+    {
+        if (pos % 12000 == 0)
+        {
+            p.lookaheadMs = lookaheads[k++ % 8];
+            e->setParams (p);
+        }
+        double* io[2] = { s.l.data() + pos, s.r.data() + pos };
+        e->process (io, 2, nullptr, 0, 256);
+    }
+    double worst = 0.0;
+    for (size_t i = 2; i < s.size(); ++i)
+        worst = std::max (worst, std::abs (s.l[i] - 2 * s.l[i - 1] + s.l[i - 2]));
+    // a raw delay jump would produce a step of up to the full amplitude (curvature ~1)
+    CHECK (worst < inputCurv * 20.0, "max curvature %.3g vs sine %.3g", worst, inputCurv);
+}
+
+TEST (movingAverageNoDrift)
+{
+    // The O(1) running sum must not drift: compare against exact recomputation after 10 M samples.
+    auto ma = std::make_unique<MovingAverage<512>>();
+    ma->setLength (377);
+    std::mt19937 rng (9);
+    std::uniform_real_distribution<double> u (0.0, 60.0);
+    std::vector<double> hist (377, 0.0);
+    double out = 0.0;
+    for (int i = 0; i < 10000000; ++i)
+    {
+        const double v = u (rng);
+        hist[static_cast<size_t> (i % 377)] = v;
+        out = ma->process (v);
+    }
+    double exact = 0.0;
+    for (double v : hist)
+        exact += v;
+    CHECK_NEAR (out, exact / 377.0, 1e-9);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 13. zero-delay feedback topology
+namespace
+{
+CompressorParams feedbackParams (Topology t, double ratio)
+{
+    CompressorParams p = transparentDefaults();
+    p.mode = EngineMode::analog;
+    p.transformer = p.amplifier = false;
+    p.topology = t;
+    p.ratio = ratio;
+    return p;
+}
+} // namespace
+
+TEST (zdfFeedbackStaticMatchesFeedForward)
+{
+    // Settled output level of FB and FF must agree (exact FB law incl. knee + zero-delay loop).
+    const double fs = 48000.0;
+    for (double ratio : { 2.0, 4.0, 10.0, 20.0 })
+    {
+        double lvl[2];
+        for (int t = 0; t < 2; ++t)
+        {
+            CompressorParams p = feedbackParams (t == 0 ? Topology::feedForward : Topology::feedBack, ratio);
+            p.thresholdDb = -20.0;
+            p.attackMs = 10.0;
+            p.releaseMs = 300.0;
+            p.detection = DetectionMode::rms;
+            auto e = makeEngine (fs, p);
+            Stereo s = sine (fs, 1000.0, 0.5, 512 * 560);
+            run (*e, s);
+            lvl[t] = rmsDb (s.l, s.size() - 48000, s.size());
+        }
+        CHECK_NEAR (lvl[1], lvl[0], 0.01);
+    }
+}
+
+TEST (zdfLoopCompensationExact)
+{
+    // The bare loop (flat detector, analog envelope, exact FB law, ZDF solver) must reproduce the
+    // feed-forward step response to within one sample: loop-gain pre-warping is exact.
+    const double fs = 48000.0;
+    for (double ratio : { 2.0, 4.0, 20.0 })
+        for (double att : { 0.05, 1.0, 10.0, 100.0 })
+        {
+            BallisticsSettings b;
+            b.attackMs = att;
+            b.releaseMs = 500.0;
+            AnalogEnvelope ff, fb;
+            ff.prepare (fs);
+            fb.prepare (fs);
+            ff.configure (b, 0.0);
+            fb.configure (b, ratio - 1.0);
+            const double levelIn = 0.0, thr = -30.0, kneeDb = 0.0;
+            const double target = -GainComputer::feedForward (levelIn, thr, ratio, kneeDb);
+            int tFF = -1, tFB = -1;
+            for (int n = 0; n < static_cast<int> (fs) && (tFF < 0 || tFB < 0); ++n)
+            {
+                const double rff = ff.process (target);
+                auto H = [&] (double r) { return fb.peekBeforeRc (-GainComputer::feedBack (levelIn - r, thr, ratio, kneeDb)); };
+                const double r = FeedbackSolver::solve (H, fb.getOutputBeforeRc()).r;
+                const double rfb = fb.process (-GainComputer::feedBack (levelIn - r, thr, ratio, kneeDb));
+                const double goal = target * (1.0 - std::exp (-1.0));
+                if (tFF < 0 && rff >= goal) tFF = n;
+                if (tFB < 0 && rfb >= goal) tFB = n;
+            }
+            CHECK (std::abs (tFF - tFB) <= 1, "R %.0f att %.2f: FF %d vs FB %d samples", ratio, att, tFF, tFB);
+        }
+}
+
+TEST (zdfFeedbackTimingMatchesFeedForward)
+{
+    // Full engine. Attack time constants (63 %) in FB must track FF, and the FB step response must
+    // not overshoot more than FF. Tolerance: the analog detector's tilt filter (-3 dB shelf below
+    // 90 Hz, ~2 ms settling after a step) sits *inside* the loop in FB but outside it in FF, which
+    // measurably lengthens slow FB attacks by up to ~25 % on a DC step (with the tilt flattened the
+    // two are identical to the sample — see zdfLoopCompensationExact). That difference is the
+    // physics of frequency-dependent feedback detection, not a timing error.
+    const double fs = 48000.0;
+    for (double ratio : { 4.0, 20.0 })
+        for (double att : { 0.05, 1.0, 10.0 })
+        {
+            double t63[2], peak[2];
+            for (int t = 0; t < 2; ++t)
+            {
+                CompressorParams p = feedbackParams (t == 0 ? Topology::feedForward : Topology::feedBack, ratio);
+                p.thresholdDb = -30.0;
+                p.attackMs = att;
+                p.releaseMs = 500.0;
+                p.detection = DetectionMode::peak;
+                auto e = makeEngine (fs, p);
+                Stereo s (static_cast<size_t> (fs));
+                std::fill (s.l.begin(), s.l.end(), 1.0);
+                std::fill (s.r.begin(), s.r.end(), 1.0);
+                run (*e, s);
+                const double fin = -20.0 * std::log10 (s.l.back());
+                t63[t] = -1.0;
+                peak[t] = 0.0;
+                for (size_t i = 0; i < s.size(); ++i)
+                {
+                    const double gr = -20.0 * std::log10 (s.l[i]);
+                    peak[t] = std::max (peak[t], gr);
+                    if (t63[t] < 0.0 && gr >= fin * (1.0 - std::exp (-1.0)))
+                        t63[t] = 1000.0 * static_cast<double> (i) / fs;
+                }
+            }
+            const double tol = std::max (0.25 * t63[0], 0.05); // 50 µs floor (2.4 samples)
+            CHECK (std::abs (t63[1] - t63[0]) <= tol, "R %.0f att %.2f: FB %.3f ms vs FF %.3f ms", ratio, att, t63[1], t63[0]);
+            CHECK (peak[1] <= peak[0] + 0.1, "R %.0f att %.2f: FB overshoot %.2f dB vs FF %.2f dB", ratio, att, peak[1], peak[0]);
+        }
+}
+
+TEST (feedbackSolverStress)
+{
+    // Hybrid + feedback with extreme settings and wild input: finite output, bounded solver work.
+    const double fs = 96000.0;
+    CompressorParams p;
+    p.mode = EngineMode::hybrid;
+    p.topology = Topology::feedBack;
+    p.ratio = 20.0;
+    p.kneeDb = 24.0;
+    p.attackMs = 0.01;
+    p.releaseMs = 10.0;
+    p.thresholdDb = -60.0;
+    p.detection = DetectionMode::hybrid;
+    p.scLpfOn = true;
+    p.transformer = p.amplifier = false;
+    auto e = makeEngine (fs, p);
+    std::mt19937 rng (3);
+    std::uniform_real_distribution<double> u (-1.0, 1.0);
+    Stereo s (static_cast<size_t> (fs * 2));
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        const double burst = (i / 4000) % 3 == 0 ? 16.0 : ((i / 4000) % 3 == 1 ? 0.0 : 1e-8);
+        s.l[i] = burst * u (rng);
+        s.r[i] = (i % 1000 < 500) ? burst : -burst; // square wave
+    }
+    run (*e, s);
+    bool finite = true;
+    for (size_t i = 0; i < s.size(); ++i)
+        finite = finite && std::isfinite (s.l[i]) && std::isfinite (s.r[i]);
+    CHECK (finite, "non-finite output");
+    CHECK (e->getAverageSolverEvaluations() < 8.0, "solver average %.2f evaluations", e->getAverageSolverEvaluations());
 }
 
 // ---------------------------------------------------------------------------------------------

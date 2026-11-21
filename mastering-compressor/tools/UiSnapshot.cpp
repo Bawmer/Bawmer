@@ -20,6 +20,7 @@ int main (int argc, char** argv)
     set (lumen::ids::attack, 8.0f);
     set (lumen::ids::release, 180.0f);
     set (lumen::ids::autoRelease, 1.0f);
+    set (lumen::ids::lookahead, 3.0f);
 
     const double fs = 48000.0;
     const int block = 480;

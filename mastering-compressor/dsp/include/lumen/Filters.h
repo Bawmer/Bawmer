@@ -40,6 +40,22 @@ public:
         hp = v0 - k * v1 - v2;
     }
 
+    /** Output for input x *without* advancing the state (used by the zero-delay feedback solver;
+        the filter is linear, so peek(x) = peek(0) + x·(peek(1) - peek(0))). */
+    inline double peek (double v0) const noexcept
+    {
+        const double v3 = v0 - ic2;
+        const double v1 = a1 * ic1 + a2 * v3;
+        const double v2 = ic2 + a2 * ic1 + a3 * v3;
+        switch (type)
+        {
+            case Type::lowpass:  return v2;
+            case Type::highpass: return v0 - k * v1 - v2;
+            case Type::bandpass: return v1;
+        }
+        return v2;
+    }
+
     inline double process (double x) noexcept
     {
         double lp, bp, hp;
@@ -110,6 +126,8 @@ public:
     {
         return x + gLow * low.process (x) + gHigh * high.process (x);
     }
+
+    inline double peek (double x) const noexcept { return x + gLow * low.peek (x) + gHigh * high.peek (x); }
 
 private:
     Svf low, high;

@@ -80,6 +80,7 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
     : proc (p), state (p.apvts),
       bypass (state, ids::bypass, "BYPASS"), matchBypass (state, ids::matchBypass, "MATCH LEVEL", true),
       oversampling (state, ids::oversampling, "OVERSAMPLING"), osQuality (state, ids::osQuality, "OS FILTER"),
+      lookaheadMode (state, ids::lookaheadMode, "LOOKAHEAD MODE"),
       threshold (state, ids::threshold, "THRESHOLD"), ratio (state, ids::ratio, "RATIO"),
       attack (state, ids::attack, "ATTACK"), release (state, ids::release, "RELEASE"), knee (state, ids::knee, "KNEE"),
       lookahead (state, ids::lookahead, "LOOKAHEAD"), makeup (state, ids::makeup, "MAKEUP", true),
@@ -168,7 +169,9 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
     autoRelease.button.setTooltip ("Program-dependent dual release");
     autoGain.button.setTooltip ("Automatic makeup gain from the long-term average gain reduction");
 
-    for (auto* c : { &oversampling, &osQuality, &detection, &channelMode, &topology })
+    lookaheadMode.box.setTooltip ("Exact: gain reduction is complete when a transient arrives (proven zero overshoot). "
+                                  "Classic: lookahead only starts the attack earlier.");
+    for (auto* c : { &oversampling, &osQuality, &lookaheadMode, &detection, &channelMode, &topology })
         c->addTo (*this);
 
     infoLabel.setFont (uiFont (11.5f));
@@ -247,6 +250,7 @@ void MainPanel::updateEnablement()
     scHpf.setEnabled (scHpfOn.button.getToggleState());
     scLpf.setEnabled (scLpfOn.button.getToggleState());
     link.setEnabled (juce::roundToInt (state.getRawParameterValue (ids::channelMode)->load()) != 1);
+    lookaheadMode.box.setEnabled (state.getRawParameterValue (ids::lookahead)->load() > 0.0f);
 }
 
 void MainPanel::refresh()
@@ -375,7 +379,8 @@ void MainPanel::resized()
         monitorMode.setBounds (240, 80, 50, 26);
         oversampling.setBounds ({ 304, 68, 92, 40 });
         osQuality.setBounds ({ 404, 68, 132, 40 });
-        infoLabel.setBounds (540, 80, kWidth - 540 - 16, 26);
+        lookaheadMode.setBounds ({ 546, 68, 160, 40 });
+        infoLabel.setBounds (712, 80, kWidth - 712 - 16, 26);
     }
 
     // displays (y 118..410)

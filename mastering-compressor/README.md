@@ -25,11 +25,14 @@ mastering-compressor/
 │   ├── Filters.h             TPT state-variable filter, one-pole, detector tilt, K-weighting
 │   ├── GainComputer.h        feed-forward and feedback soft-knee static curves
 │   ├── Envelope.h            peak/RMS/hybrid detectors, digital + analog ballistics
+│   ├── Lookahead.h           exact-onset lookahead shaper, crossfading delay
+│   ├── FeedbackSolver.h      zero-delay feedback loop solver
 │   ├── Oversampler.h         2x–16x polyphase half-band FIR cascade
 │   ├── ColorStage.h          transformer + amplifier models (oversampled)
 │   └── CompressorEngine.h    the complete engine (routing, link, M/S, mix, bypass, metering)
 ├── plugin/Source/            JUCE wrapper: parameters, processor, presets, UI
-├── tests/TestMain.cpp        automated DSP verification (22 tests)
+├── docs/                     engine development prompt + design/measurement notes
+├── tests/TestMain.cpp        automated DSP verification (31 tests)
 └── tools/UiSnapshot.cpp      dev tool: renders the UI to PNG while audio runs
 ```
 
@@ -85,10 +88,12 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 * **Gain computer**: quadratic soft knee (Giannoulis/Massberg/Reiss, JAES 2012), computed in the
   log domain. Below the knee and at 1:1 the gain is *exactly* 0 dB. The gain is applied as
   `exp(-r·ln10/20)`, and the code skips that call when r == 0, so a unity path stays bit-exact.
-* **Feedback topology**: the detector reads the previous output sample. The feedback gain law
-  `-(R-1)·overshoot` makes the closed loop settle on the *same* static curve as feed-forward
-  (verified numerically). Loop stability is guaranteed by bounding the envelope coefficient to
-  `a ≥ k/(k+1)`, with `k = R-1`.
+* **Feedback topology**: a zero-delay loop. The implicit equation `y = u·10^(−r/20)` with the
+  detector and envelope is solved each sample with a bracketed root finder (unique root, hard
+  iteration cap, about 4.4 evaluations per sample). The feedback gain law is the exact inverse
+  of the feed-forward curve, knee included, so the settled output equals feed-forward. Envelope
+  coefficients are pre-warped by the loop gain R−1, so attack/release mean the same in both
+  topologies. Details and measurements are in [`docs/ENGINE_NOTES.md`](docs/ENGINE_NOTES.md).
 * **Detectors**: peak, RMS (10 ms, AES-17 calibrated so a sine reads the same in both modes),
   and hybrid (RMS body; peaks take over only when they exceed it by more than 6 dB of crest factor).
 * **Ballistics**: smoothing in the dB domain gives constant dB/s release. Auto-release is a
@@ -98,9 +103,11 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 * **Analog envelope**: attack time depends on overshoot (0.5×–3× the set value). Dual release is
   always on. A final 0.35 ms RC stage rounds off the onset of gain changes. The detector tilt is
   −3 dB below 90 Hz and +1.5 dB above 5 kHz.
-* **Lookahead**: audio is delayed by L samples. The gain-reduction target passes through an
-  O(1) sliding-window maximum of length L+1 before the ballistics, so reduction starts before the
-  transient arrives.
+* **Lookahead**: audio is delayed by L samples. In *Exact* mode (the default) the reduction
+  target goes through a sliding maximum and a nonnegative, normalised triangular kernel no longer
+  than L+1. That provably guarantees full reduction when the transient reaches the output (zero
+  overshoot, tested in every mode). *Classic* mode only starts the attack earlier. Lookahead
+  changes crossfade over 20 ms.
 * **Stereo link**: the per-channel reduction is blended toward the louder channel's reduction.
   At 100 % both channels get identical gain, so the image cannot move. Dual mono forces 0 %.
   In M/S mode the link couples Mid and Side.
@@ -158,7 +165,7 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 | Makeup | −24 … +24 dB | External SC | on/off (sidechain bus) |
 | Mix | 0 … 100 % | Auto Release / Auto Gain | on/off |
 | Stereo Link | 0 … 100 % | Hybrid Blend | 0 … 100 % |
-| Lookahead | 0 … 20 ms | Drive | 0 … 24 dB |
+| Lookahead | 0 … 20 ms (Exact / Classic) | Drive | 0 … 24 dB |
 | Oversampling | Off / 2x / 4x / 8x / 16x | Character | 0 … 100 % |
 | OS filter | Linear Phase HQ / Low Latency | Colour Mix | 0 … 100 % |
 | Bypass / Match Level | on/off | Transformer / Amplifier | on/off |
@@ -175,11 +182,14 @@ aspect ratio, high-DPI). It has:
 
 ## Verification
 
-`tests/TestMain.cpp` runs 22 tests (about 3 s). All pass on GCC 13 / Linux.
+`tests/TestMain.cpp` runs 31 tests (about 6 s). All pass on GCC 13 / Linux, and they are also
+clean under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 | Area | What is checked |
 |---|---|
-| Transfer curve | hard knee exact to 1e-12. Soft-knee continuity and monotonic slope. Feedback fixed point equals feed-forward. Full-engine steady state within 0.1 dB (peak and RMS) |
+| Transfer curve | hard knee exact to 1e-12. Soft-knee continuity and monotonic slope. Feedback fixed point equals feed-forward at every level, including the knee (1e-9 dB). Inverse curve round trip. Full-engine steady state within 0.1 dB (peak and RMS) |
+| Lookahead | shaper guarantee property test. Zero overshoot (≤ 1e-6 dB) in all modes. Click-free lookahead changes. Drift-free running sums over 10 M samples |
+| Feedback (ZDF) | settled FB = FF within 0.01 dB up to 20:1. Bare-loop timing equals FF within 1 sample. Engine attack within 25 % of FF with no extra overshoot. Solver stress test (16× bursts, square waves, 1e-8 signals) stays finite with < 8 evaluations on average |
 | Attack / release | measured time constants match 1−1/e within 0.3 dB. Auto-release recovers short bursts at least 2.5× faster than sustained compression |
 | Smoothness | max per-sample gain step. Ultra mode has lower gain-trajectory curvature than Digital |
 | Stereo link | 100 % gives identical gain on both channels. 0 %, 50 % and dual mono behave as specified |
@@ -193,7 +203,8 @@ aspect ratio, high-DPI). It has:
 | Sample rates | 44.1 / 48 / 88.2 / 96 / 176.4 / 192 / 352.8 / 384 kHz × all four modes keep the same static behaviour |
 
 CPU (one core of the build container, stereo at 48 kHz, 2 ms lookahead): Ultra/Digital about
-1.1 %, Analog/Hybrid at 4x about 4–5 %, Hybrid at 16x about 11 %.
+1.1–1.3 %, Analog/Hybrid at 4x about 4 %, Hybrid at 16x about 9 %. The feedback topology adds
+about 3 % for the per-sample loop solve.
 
 ## Not yet done
 
@@ -203,7 +214,13 @@ CPU (one core of the build container, stereo at 48 kHz, 2 ms lookahead): Ultra/D
 * **Sample-accurate automation**: parameters are read per block and ramped per sample. That is
   click-free, but it isn't sample-accurate when a host splits automation within a block.
 * **Latency-changing parameters** (lookahead, oversampling factor, switching colour on or off)
-  are not intended for automation. They make the host re-compensate.
+  are not intended for automation. They make the host re-compensate. Lookahead changes crossfade,
+  but switching the colour stage on or off still jumps the wet path's latency.
+* **Linked feedback**: each channel's feedback loop is solved with its own gain, and the
+  stereo link is applied afterwards. A coupled 2-channel solve isn't implemented.
+* **Engine roadmap**: true-peak detection, a C² knee, crest-adaptive release/hold,
+  anti-modulation smoother selection, and opto / vari-mu / FET models are still open (see
+  `docs/ENGINE_NOTES.md`).
 * **Minimum-phase oversampling** is not offered. The two choices are linear phase and a
   shorter low-latency linear-phase set.
 * **Licensing**: JUCE 8 is dual-licensed (AGPLv3 / commercial). A closed-source release needs a
