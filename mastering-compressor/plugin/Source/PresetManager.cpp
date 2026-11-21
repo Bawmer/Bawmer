@@ -8,22 +8,23 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& s) : state (s)
     using namespace ids;
     // mode: 0 Ultra, 1 Digital, 2 Analog, 3 Hybrid | detection: 0 Peak, 1 RMS, 2 Hybrid
     // channelMode: 0 Stereo, 1 Dual Mono, 2 M/S | topology: 0 FF, 1 FB
+    // releaseMode: 0 Manual, 1 Auto Smooth, 2 Auto Program, 3 Auto Fast
     factory = {
         { "Init - Ultra Transparent", {} },
         { "Mastering Glue 2:1", { { mode, 1 }, { threshold, -18 }, { ratio, 2 }, { attack, 30 }, { release, 300 },
-                                  { knee, 6 }, { autoRelease, 1 }, { detection, 1 } } },
+                                  { knee, 6 }, { releaseMode, 2 }, { detection, 1 } } },
         { "Gentle Bus 1.5:1", { { mode, 0 }, { threshold, -20 }, { ratio, 1.5f }, { attack, 30 }, { release, 500 },
-                                { knee, 12 }, { autoRelease, 1 }, { autoGain, 1 } } },
+                                { knee, 12 }, { releaseMode, 1 }, { autoGain, 1 } } },
         { "Classical - Barely There", { { mode, 0 }, { threshold, -24 }, { ratio, 1.3f }, { attack, 50 },
-                                        { release, 1200 }, { knee, 18 }, { autoRelease, 1 }, { scHpf, 40 } } },
+                                        { release, 1200 }, { knee, 18 }, { releaseMode, 1 }, { scHpf, 40 } } },
         { "Cinematic Wide Dynamics", { { mode, 0 }, { threshold, -16 }, { ratio, 1.5f }, { attack, 80 },
-                                       { release, 1500 }, { knee, 24 }, { autoRelease, 1 }, { lookahead, 2 } } },
+                                       { release, 1500 }, { knee, 24 }, { releaseMode, 1 }, { lookahead, 2 } } },
         { "Transient Control (Lookahead)", { { mode, 1 }, { threshold, -10 }, { ratio, 4 }, { attack, 1 },
-                                             { release, 80 }, { knee, 3 }, { lookahead, 5 }, { detection, 0 } } },
+                                             { release, 80 }, { knee, 3 }, { lookahead, 5 }, { detection, 3 } } },
         { "Hip-Hop Low-End Control", { { mode, 1 }, { threshold, -14 }, { ratio, 3 }, { attack, 10 }, { release, 120 },
-                                       { knee, 6 }, { scHpf, 30 }, { detection, 2 } } },
+                                       { knee, 6 }, { scHpf, 30 }, { detection, 2 }, { hold, 20 } } },
         { "EDM Dense Master", { { mode, 1 }, { threshold, -16 }, { ratio, 3 }, { attack, 3 }, { release, 60 },
-                                { knee, 4 }, { autoRelease, 1 }, { lookahead, 1.5f }, { detection, 2 }, { scHpf, 90 } } },
+                                { knee, 4 }, { releaseMode, 3 }, { lookahead, 1.5f }, { detection, 2 }, { scHpf, 90 } } },
         { "Mid/Side Center Focus", { { mode, 1 }, { channelMode, 2 }, { link, 0 }, { threshold, -18 }, { ratio, 2 },
                                      { attack, 20 }, { release, 250 }, { knee, 6 } } },
         { "Analog Warmth", { { mode, 2 }, { threshold, -16 }, { ratio, 2 }, { attack, 20 }, { release, 250 },
@@ -35,9 +36,9 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& s) : state (s)
         { "Hybrid Punch", { { mode, 3 }, { threshold, -18 }, { ratio, 3 }, { attack, 25 }, { release, 150 },
                             { blend, 60 }, { drive, 4 }, { colorMix, 60 } } },
         { "Jazz Natural Hybrid", { { mode, 3 }, { threshold, -22 }, { ratio, 1.8f }, { attack, 40 }, { release, 700 },
-                                   { knee, 12 }, { blend, 40 }, { drive, 3 }, { colorMix, 40 }, { autoRelease, 1 } } },
+                                   { knee, 12 }, { blend, 40 }, { drive, 3 }, { colorMix, 40 }, { releaseMode, 1 } } },
         { "Pop Polish", { { mode, 3 }, { threshold, -17 }, { ratio, 2.5f }, { attack, 15 }, { release, 200 },
-                          { knee, 8 }, { blend, 50 }, { drive, 5 }, { colorMix, 50 }, { autoRelease, 1 } } },
+                          { knee, 8 }, { blend, 50 }, { drive, 5 }, { colorMix, 50 }, { releaseMode, 2 } } },
     };
     refreshUserPresets();
 }

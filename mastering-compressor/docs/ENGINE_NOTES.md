@@ -1,4 +1,11 @@
-# Engine design notes — round 1: exact lookahead and zero-delay feedback
+# Engine design notes
+
+* Round 1 — exact lookahead and zero-delay feedback (§1–3 below)
+* Round 2 — true peak, adaptive release, hold, smooth hybrid detector (§4–7)
+
+---
+
+# Round 1: exact lookahead and zero-delay feedback
 
 This round implements sections 3.3, 6 and 7.2–7.4 of [`DSP_ENGINE_PROMPT.md`](DSP_ENGINE_PROMPT.md).
 Every claim here has an automated test in `tests/TestMain.cpp`. The before/after numbers come
@@ -173,17 +180,119 @@ R−1 (19× at 20:1, against 0.95× in FF). It is inherent to feedback detection
 **Approximation:** each channel's loop is solved with that channel's own gain. Stereo linking
 is applied afterwards. A fully coupled 2-D solve for linked feedback is possible future work.
 
+# Round 2: true peak, adaptive release, hold, smooth hybrid detector
+
+This round implements sections 2.1, 2.4, 4.2, 4.4 and 4.5 of the prompt.
+
+## 4. True-peak detection (`TruePeak.h`)
+
+*Detection → True Peak*. A 4× polyphase windowed-sinc interpolator in the detector. Phase 0 is
+a pure delay, so original samples pass through unchanged. The level is the maximum of the four
+phases.
+
+**Filter length was decided by measurement.** I first used 49 taps, the length of the
+BS.1770-4 reference filter. A coarse sweep suggested it was within 0.024 dB of ideal, but a
+dense scan (0.0005·fs steps × 64 phases, compared with an *ideal* interpolator evaluated at the
+same 4× grid points) showed under-reads up to **0.34 dB** between 0.35·fs and 0.45·fs. That's
+because 49 taps at 4× can't pass 0.45·fs and still reject the image at 0.55·fs. I scanned longer
+filters:
+
+| Taps (delay) | ≤ 0.35·fs | ≤ 0.40·fs | ≤ 0.45·fs |
+|---|---|---|---|
+| 49 (6), β 6.5 | 0.017 dB | 0.341 dB | 0.341 dB |
+| 97 (12), β 7 | 0.001 | 0.002 | 0.169 |
+| **145 (18), β 7** | **0.001** | **0.001** | **0.006** |
+| 193 (24), β 7 | 0.001 | 0.001 | 0.003 |
+
+I chose 145 taps. The extra latency is 18 samples (0.375 ms at 48 kHz), and the cost is about
++0.6–0.9 % of one core in stereo. The 4× grid itself can still miss a sine's crest by up to
+`−20·log10(cos(2π·f/fs/8))`: 0.38 dB at 0.375·fs and 0.55 dB at 0.45·fs. That limit applies
+to every 4× true-peak meter and is documented in `TruePeakInterpolator::gridBoundDb`.
+
+**Alignment.** The detector reports the interval that began D = 18 samples earlier, so the
+audio path is delayed by D in true-peak mode. Detection stays sample-aligned, the reported
+latency grows by D, and Exact lookahead keeps its zero-overshoot guarantee (tested). True peak
+needs future samples, so it can't run inside the zero-delay feedback loop. There, the
+feedback path uses the sample peak.
+
+**fs/4 sine at 45°:** sample peak −3.01 dB, true peak −0.004 dB. In the engine, with threshold
+−1.5 dB at 20:1, sample-peak detection applies no reduction, while true peak applies 1.43 dB.
+
+## 5. Smooth hybrid detector
+
+`max(rms, peak − 6 dB)` had a kink in ∂L/∂x where peaks take over. It's now
+`rms + softplus(peak − 6 − rms)` with `softplus(z) = ln(1 + e^{2z})/2`. That is
+C^∞, never more than ln2/2 = 0.35 dB from the hard max, and below 1e-5 dB of deviation when
+peaks are inside the crest allowance, so the sine calibration is unchanged.
+
+## 6. Adaptive auto-release (`ReleaseShapeTable`, `CrestEstimator`)
+
+All three auto shapes are dual-envelope designs. Their release time constants are multiplied by
+
+```
+m = clamp( (1 + d·r_s/12) · 2^(c·(12 − C)/6),  1/3, 3 )
+```
+
+* `r_s`: reduction smoothed over 200 ms.
+* `C`: crest factor (peak-to-RMS, dB, 500 ms windows, smoothed over 300 ms).
+* Weights `(d, c)`: Smooth (0.5, 0), Program (1, 1), Fast (0, 1.5).
+
+Both inputs are slow, and m is recalculated every 32 samples, so the release time never
+modulates at audio rate. The test confirms m never moves by more than 2 % per update on gated
+noise.
+
+Recovery to < 1 dB of reduction after a 1 kHz burst (−6 dBFS, threshold −30 dB, 4:1, release
+400 ms, RMS detection):
+
+| Release mode | 10 ms burst | 300 ms burst | 3 s burst |
+|---|---|---|---|
+| Manual | 1137 ms | 1185 ms | 1185 ms |
+| Auto Smooth | 1176 ms | 1673 ms | 1803 ms |
+| Auto Program | 491 ms | 3039 ms | 3619 ms |
+| Auto Fast | 148 ms | 1337 ms | 2166 ms |
+
+* **Duration:** Program recovers 7× faster after a 10 ms hit than after 3 s of compression.
+* **Depth:** after a 3 s burst at about 3 dB of reduction, recovery takes 2.8 s; at about
+  18 dB it takes 3.6 s.
+* **Crest:** transient hits with the same peaks recover in 1.6 s; dense material takes 3.6 s.
+
+A steady sine is the densest possible signal (crest 3 dB), which pushes Program to its 3×
+limit. That's why Program is slowest in the 3 s column. On real masters (crest about 8–12 dB)
+the crest term is close to 1.
+
+## 7. Hold
+
+After any sample in the attack branch, release is suspended for the hold time. This is
+implemented in both envelopes. In the analog envelope the hold counter is part of the
+explicit state, so the feedback solver's `H(r)` stays pure, continuous and non-increasing.
+
+**Derivation:** a peak detector on a sine of frequency f sees peaks every 1/(2f) seconds. A hold
+of at least 1/(2f) means no release ever starts between peaks, so the steady-state gain is
+constant. At 30 Hz that is 16.7 ms.
+
+THD+N on a 30 Hz sine (peak detection, attack 0.1 ms, release 30 ms, 4:1, −6 dBFS):
+
+| Hold | 0 ms | 8 ms | 16.7 ms | 25 ms |
+|---|---|---|---|---|
+| THD+N | −24.9 dB | −29.4 dB | **−270 dB** (numerical floor) | −270 dB |
+
 ## Verification status
 
-31 tests pass. They are also clean under AddressSanitizer and UndefinedBehaviorSanitizer
-(`-fsanitize=address,undefined`). The plugin builds with zero warnings.
+37 tests pass, clean under AddressSanitizer and UndefinedBehaviorSanitizer. The plugin builds
+with zero warnings.
+
+Round 1 added 9 tests: lookahead guarantee, zero overshoot, click-free changes, drift, exact
+feedback law, curve inverse, and three feedback tests. Round 2 adds 6:
+* `truePeakInterpolatorAccuracy`: ≤ 0.02 dB versus an ideal grid; over-read ≤ 0.02 dB
+* `truePeakEngineIntegration`: inter-sample catch, latency, bit-exact null, lookahead guarantee
+* `holdRemovesLowFrequencyRipple`: Digital and Analog modes
+* `adaptiveReleaseProgramDependence`: duration, depth, crest and shape ordering
+* `adaptiveReleaseMultiplierIsSlow`
+* `hybridDetectorIsSmooth`
 
 ## Next rounds (remaining sections of the prompt)
 
-* §2 true-peak detection (BS.1770 4× interpolation)
-* §2 crest-factor-weighted hybrid detector
 * §3 C²-continuous knee
-* §4 crest/depth-adaptive release, hold
 * §5 anti-modulation smoother selection by sideband measurement; gain-path oversampling
   decision for very fast attacks
 * §5.4 link-law and image-shift bounds

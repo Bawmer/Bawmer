@@ -27,12 +27,13 @@ mastering-compressor/
 │   ├── Envelope.h            peak/RMS/hybrid detectors, digital + analog ballistics
 │   ├── Lookahead.h           exact-onset lookahead shaper, crossfading delay
 │   ├── FeedbackSolver.h      zero-delay feedback loop solver
+│   ├── TruePeak.h            4x true-peak (inter-sample) detector
 │   ├── Oversampler.h         2x–16x polyphase half-band FIR cascade
 │   ├── ColorStage.h          transformer + amplifier models (oversampled)
 │   └── CompressorEngine.h    the complete engine (routing, link, M/S, mix, bypass, metering)
 ├── plugin/Source/            JUCE wrapper: parameters, processor, presets, UI
 ├── docs/                     engine development prompt + design/measurement notes
-├── tests/TestMain.cpp        automated DSP verification (31 tests)
+├── tests/TestMain.cpp        automated DSP verification (37 tests)
 └── tools/UiSnapshot.cpp      dev tool: renders the UI to PNG while audio runs
 ```
 
@@ -95,11 +96,14 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
   coefficients are pre-warped by the loop gain R−1, so attack/release mean the same in both
   topologies. Details and measurements are in [`docs/ENGINE_NOTES.md`](docs/ENGINE_NOTES.md).
 * **Detectors**: peak, RMS (10 ms, AES-17 calibrated so a sine reads the same in both modes),
-  and hybrid (RMS body; peaks take over only when they exceed it by more than 6 dB of crest factor).
-* **Ballistics**: smoothing in the dB domain gives constant dB/s release. Auto-release is a
-  dual-envelope design. A fast branch recovers after transients, and a slow branch charges only
-  under sustained compression and then sets the recovery. Short peaks therefore release quickly,
-  while dense passages release slowly without pumping.
+  hybrid (RMS body, with peaks blended in by a smooth soft-max once they exceed it by 6 dB of
+  crest factor), and **true peak**. True peak uses a 145-tap 4× interpolator, within 0.006 dB of
+  ideal up to 0.45·fs. Its 18-sample detector delay is compensated on the audio path.
+* **Ballistics**: smoothing in the dB domain gives constant dB/s release. Auto-release
+  (Smooth / Program / Fast) is a dual-envelope design whose release also adapts to reduction
+  depth and crest factor. It uses only smoothed quantities, so the release time never moves at
+  audio rate. **Hold** (0–50 ms) suspends release after each peak. A hold of at least 1/(2f)
+  removes gain ripple at frequency f; at 30 Hz, THD+N falls from −25 dB to the numerical floor.
 * **Analog envelope**: attack time depends on overshoot (0.5×–3× the set value). Dual release is
   always on. A final 0.35 ms RC stage rounds off the onset of gain changes. The detector tilt is
   −3 dB below 90 Hz and +1.5 dB above 5 kHz.
@@ -159,11 +163,12 @@ sc ─┴─[M/S enc]─ SC HPF/LPF ─ detector ─ gain computer ─ lookahead
 |---|---|---|---|
 | Threshold | −60 … 0 dB | SC HPF | 20 … 500 Hz (on/off) |
 | Ratio | 1:1 … 20:1 | SC LPF | 1 … 20 kHz (on/off) |
-| Attack | 0.01 … 250 ms | Detection | Peak / RMS / Hybrid |
+| Attack | 0.01 … 250 ms | Detection | Peak / RMS / Hybrid / True Peak |
 | Release | 10 ms … 5 s | Channels | Stereo / Dual Mono / Mid-Side |
+| Hold | 0 … 50 ms | Release Mode | Manual / Auto Smooth / Auto Program / Auto Fast |
 | Knee | 0 … 24 dB | Topology | Feed-forward / Feedback |
 | Makeup | −24 … +24 dB | External SC | on/off (sidechain bus) |
-| Mix | 0 … 100 % | Auto Release / Auto Gain | on/off |
+| Mix | 0 … 100 % | Auto Gain | on/off |
 | Stereo Link | 0 … 100 % | Hybrid Blend | 0 … 100 % |
 | Lookahead | 0 … 20 ms (Exact / Classic) | Drive | 0 … 24 dB |
 | Oversampling | Off / 2x / 4x / 8x / 16x | Character | 0 … 100 % |
@@ -182,13 +187,15 @@ aspect ratio, high-DPI). It has:
 
 ## Verification
 
-`tests/TestMain.cpp` runs 31 tests (about 6 s). All pass on GCC 13 / Linux, and they are also
+`tests/TestMain.cpp` runs 37 tests (about 7 s). All pass on GCC 13 / Linux, and they are also
 clean under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 | Area | What is checked |
 |---|---|
 | Transfer curve | hard knee exact to 1e-12. Soft-knee continuity and monotonic slope. Feedback fixed point equals feed-forward at every level, including the knee (1e-9 dB). Inverse curve round trip. Full-engine steady state within 0.1 dB (peak and RMS) |
 | Lookahead | shaper guarantee property test. Zero overshoot (≤ 1e-6 dB) in all modes. Click-free lookahead changes. Drift-free running sums over 10 M samples |
+| True peak | ≤ 0.02 dB from an ideal 4× interpolator up to 0.45·fs. Catches the fs/4-at-45° inter-sample peak that sample peak misses. Latency and null stay exact. Lookahead guarantee holds |
+| Release / hold | adaptive release depends on duration, depth and crest. The multiplier never jumps. Shape ordering holds. Hold ≥ 1/(2f) removes 30 Hz ripple (Digital and Analog modes). Hybrid detector is smooth |
 | Feedback (ZDF) | settled FB = FF within 0.01 dB up to 20:1. Bare-loop timing equals FF within 1 sample. Engine attack within 25 % of FF with no extra overshoot. Solver stress test (16× bursts, square waves, 1e-8 signals) stays finite with < 8 evaluations on average |
 | Attack / release | measured time constants match 1−1/e within 0.3 dB. Auto-release recovers short bursts at least 2.5× faster than sustained compression |
 | Smoothness | max per-sample gain step. Ultra mode has lower gain-trajectory curvature than Digital |
@@ -218,9 +225,10 @@ about 3 % for the per-sample loop solve.
   but switching the colour stage on or off still jumps the wet path's latency.
 * **Linked feedback**: each channel's feedback loop is solved with its own gain, and the
   stereo link is applied afterwards. A coupled 2-channel solve isn't implemented.
-* **Engine roadmap**: true-peak detection, a C² knee, crest-adaptive release/hold,
-  anti-modulation smoother selection, and opto / vari-mu / FET models are still open (see
-  `docs/ENGINE_NOTES.md`).
+* **Engine roadmap**: a C² knee, anti-modulation smoother selection, link-law bounds, and
+  opto / vari-mu / FET models are still open (see `docs/ENGINE_NOTES.md`).
+* **Saved sessions** from before round 2 lose their auto-release setting: the on/off
+  parameter was replaced by *Release Mode*.
 * **Minimum-phase oversampling** is not offered. The two choices are linear phase and a
   shorter low-latency linear-phase set.
 * **Licensing**: JUCE 8 is dual-licensed (AGPLv3 / commercial). A closed-source release needs a

@@ -82,11 +82,11 @@ private:
     int historyReadIndex = 0;
 
     // main controls
-    Knob threshold, ratio, attack, release, knee, lookahead, makeup, mix, link;
+    Knob threshold, ratio, attack, release, hold, knee, lookahead, makeup, mix, link;
     // sidechain / detector
     Knob scHpf, scLpf;
-    Toggle scHpfOn, scLpfOn, extSc, autoRelease, autoGain;
-    Choice detection, channelMode;
+    Toggle scHpfOn, scLpfOn, extSc, autoGain;
+    Choice detection, channelMode, releaseMode;
     // analog / hybrid
     Choice topology;
     Knob blend, drive, character, colorMix;

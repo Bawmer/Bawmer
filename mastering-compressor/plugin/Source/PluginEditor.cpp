@@ -82,14 +82,16 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
       oversampling (state, ids::oversampling, "OVERSAMPLING"), osQuality (state, ids::osQuality, "OS FILTER"),
       lookaheadMode (state, ids::lookaheadMode, "LOOKAHEAD MODE"),
       threshold (state, ids::threshold, "THRESHOLD"), ratio (state, ids::ratio, "RATIO"),
-      attack (state, ids::attack, "ATTACK"), release (state, ids::release, "RELEASE"), knee (state, ids::knee, "KNEE"),
+      attack (state, ids::attack, "ATTACK"), release (state, ids::release, "RELEASE"), hold (state, ids::hold, "HOLD"),
+      knee (state, ids::knee, "KNEE"),
       lookahead (state, ids::lookahead, "LOOKAHEAD"), makeup (state, ids::makeup, "MAKEUP", true),
       mix (state, ids::mix, "MIX"), link (state, ids::link, "STEREO LINK"),
       scHpf (state, ids::scHpf, "SC HPF", false, true), scLpf (state, ids::scLpf, "SC LPF", false, true),
       scHpfOn (state, ids::scHpfOn, "HPF", true), scLpfOn (state, ids::scLpfOn, "LPF", true),
-      extSc (state, ids::extSc, "EXT SC", true), autoRelease (state, ids::autoRelease, "AUTO REL", true),
+      extSc (state, ids::extSc, "EXT SC", true),
       autoGain (state, ids::autoGain, "AUTO GAIN", true),
       detection (state, ids::detection, "DETECTION"), channelMode (state, ids::channelMode, "CHANNELS"),
+      releaseMode (state, ids::releaseMode, "RELEASE MODE"),
       topology (state, ids::topology, "TOPOLOGY"), blend (state, ids::blend, "HYBRID BLEND"),
       drive (state, ids::drive, "DRIVE"), character (state, ids::character, "CHARACTER"),
       colorMix (state, ids::colorMix, "COLOUR MIX"),
@@ -161,17 +163,19 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
     for (auto* b : { &prevPreset, &nextPreset, &savePreset, &deletePreset, &slotA, &slotB, &copyAB, &undo, &redo, &monitorMode })
         addAndMakeVisible (*b);
 
-    for (auto* t : { &bypass, &matchBypass, &scHpfOn, &scLpfOn, &extSc, &autoRelease, &autoGain, &transformer, &amplifier })
+    for (auto* t : { &bypass, &matchBypass, &scHpfOn, &scLpfOn, &extSc, &autoGain, &transformer, &amplifier })
         addAndMakeVisible (t->button);
     bypass.button.setTooltip ("Compare with the unprocessed signal (latency-aligned)");
     matchBypass.button.setTooltip ("Loudness-matched bypass: bypassed signal is gain-matched to the processed output");
     extSc.button.setTooltip ("Use the external sidechain input for detection");
-    autoRelease.button.setTooltip ("Program-dependent dual release");
+    releaseMode.box.setTooltip ("Manual: one release time. Auto: dual-envelope release that adapts to duration, depth "
+                                "and crest factor (Smooth = gentle adaptation, Program = widest, Fast = quickest recovery)");
+    hold.slider.setTooltip ("Suspends release after each peak. >= 1/(2f) removes ripple at frequency f (17 ms for 30 Hz)");
     autoGain.button.setTooltip ("Automatic makeup gain from the long-term average gain reduction");
 
     lookaheadMode.box.setTooltip ("Exact: gain reduction is complete when a transient arrives (proven zero overshoot). "
                                   "Classic: lookahead only starts the attack earlier.");
-    for (auto* c : { &oversampling, &osQuality, &lookaheadMode, &detection, &channelMode, &topology })
+    for (auto* c : { &oversampling, &osQuality, &lookaheadMode, &detection, &channelMode, &releaseMode, &topology })
         c->addTo (*this);
 
     infoLabel.setFont (uiFont (11.5f));
@@ -182,7 +186,7 @@ MainPanel::MainPanel (LumenAudioProcessor& p)
     for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &grMeter, &curve, &history })
         addAndMakeVisible (c);
 
-    for (auto* k : { &threshold, &ratio, &attack, &release, &knee, &lookahead, &makeup, &mix, &link, &scHpf, &scLpf, &blend,
+    for (auto* k : { &threshold, &ratio, &attack, &release, &hold, &knee, &lookahead, &makeup, &mix, &link, &scHpf, &scLpf, &blend,
                      &drive, &character, &colorMix })
         k->addTo (*this);
 
@@ -401,8 +405,8 @@ void MainPanel::resized()
     mainSection = { 16, 418, kWidth - 32, 140 };
     {
         auto r = mainSection.reduced (8, 10);
-        Knob* knobs[] = { &threshold, &ratio, &attack, &release, &knee, &lookahead, &makeup, &mix, &link };
-        const int w = r.getWidth() / 9;
+        Knob* knobs[] = { &threshold, &ratio, &attack, &release, &hold, &knee, &lookahead, &makeup, &mix, &link };
+        const int w = r.getWidth() / 10;
         for (auto* k : knobs)
             k->setBounds (r.removeFromLeft (w).reduced (6, 0));
     }
@@ -430,8 +434,7 @@ void MainPanel::resized()
 
         r.removeFromLeft (12);
         auto col2 = r;
-        col2.removeFromTop (14);
-        autoRelease.button.setBounds (col2.removeFromTop (26));
+        releaseMode.setBounds (col2.removeFromTop (44));
         col2.removeFromTop (10);
         autoGain.button.setBounds (col2.removeFromTop (26));
     }

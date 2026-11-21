@@ -48,6 +48,8 @@ struct CompressorParams
     bool scLpfOn = false;
     double scLpfHz = 16000.0;    // 1k..20k
     bool autoRelease = false;
+    AutoReleaseShape autoReleaseShape = AutoReleaseShape::program;
+    double holdMs = 0.0;         // 0..50
     bool autoGain = false;
     double lookaheadMs = 0.0;    // 0..20
     LookaheadMode lookaheadMode = LookaheadMode::exact; // exact: zero overshoot at the onset
@@ -107,6 +109,7 @@ public:
             detAnalog[ch].prepare (sampleRate);
             envDigital[ch].prepare (sampleRate);
             envAnalog[ch].prepare (sampleRate);
+            crest[ch].prepare (sampleRate);
             kIn[ch].setup (sampleRate);
             kOut[ch].setup (sampleRate);
         }
@@ -125,6 +128,7 @@ public:
         loudnessCoeff = timeConstantToCoeff (3000.0, sampleRate);
         antiModCoeff = 0.0;
         autoGainS.coeff = timeConstantToCoeff (60.0, sampleRate);
+        depthCoeff = timeConstantToCoeff (200.0, sampleRate);
 
         firstParams = true;
         setParams (params);
@@ -139,6 +143,8 @@ public:
             detAnalog[ch].reset();
             envDigital[ch].reset();
             envAnalog[ch].reset();
+            crest[ch].reset();
+            smoothedReduction[ch] = 0.0;
             hpfD[ch].reset(); lpfD[ch].reset();
             hpfA[ch].reset(); lpfA[ch].reset();
             tilt[ch].reset();
@@ -163,6 +169,7 @@ public:
         const bool structural = firstParams
                                 || p.lookaheadMs != params.lookaheadMs
                                 || p.lookaheadMode != params.lookaheadMode
+                                || p.detection != params.detection
                                 || p.oversamplingLog2 != params.oversamplingLog2
                                 || p.oversamplingQuality != params.oversamplingQuality
                                 || p.mode != params.mode
@@ -171,6 +178,7 @@ public:
         const bool timing = firstParams || structural
                             || p.attackMs != params.attackMs || p.releaseMs != params.releaseMs
                             || p.autoRelease != params.autoRelease || p.ratio != params.ratio
+                            || p.autoReleaseShape != params.autoReleaseShape || p.holdMs != params.holdMs
                             || p.topology != params.topology || p.externalSidechain != params.externalSidechain;
         const bool scFilters = firstParams || p.scHpfHz != params.scHpfHz || p.scLpfHz != params.scLpfHz
                                || p.scHpfOn != params.scHpfOn || p.scLpfOn != params.scLpfOn;
@@ -187,6 +195,7 @@ public:
         params.scHpfHz = clampValue (p.scHpfHz, 20.0, 500.0);
         params.scLpfHz = clampValue (p.scLpfHz, 1000.0, 20000.0);
         params.lookaheadMs = clampValue (p.lookaheadMs, 0.0, 20.0);
+        params.holdMs = clampValue (p.holdMs, 0.0, 50.0);
         params.hybridBlend = clampValue (p.hybridBlend, 0.0, 1.0);
         params.driveDb = clampValue (p.driveDb, 0.0, 24.0);
         params.character = clampValue (p.character, 0.0, 1.0);
@@ -242,7 +251,10 @@ public:
     const CompressorParams& getParams() const noexcept { return params; }
 
     /** Total latency in samples for the current settings (report to the host). */
-    int getLatencySamples() const noexcept { return lookaheadSamples + (colourActive() ? colour.getLatencySamples() : 0); }
+    int getLatencySamples() const noexcept
+    {
+        return lookaheadSamples + truePeakDelay() + (colourActive() ? colour.getLatencySamples() : 0);
+    }
 
     /** Effective knee shown in the UI / used by the analog path. */
     static double analogKnee (double kneeDb) noexcept { return std::max (kneeDb, 6.0); }
@@ -295,6 +307,14 @@ private:
         return usesAnalogPath() && (params.transformer || params.amplifier);
     }
 
+    /** True-peak detection reports the interval that started kTruePeakDelay samples ago; the audio
+        is delayed by the same amount so detection stays sample-aligned (and exact lookahead keeps
+        its guarantee). */
+    int truePeakDelay() const noexcept
+    {
+        return params.detection == DetectionMode::truePeak ? LevelDetector::kTruePeakDelay : 0;
+    }
+
     bool feedback() const noexcept
     {
         return usesAnalogPath() && params.topology == Topology::feedBack && ! params.externalSidechain;
@@ -311,7 +331,7 @@ private:
         {
             laDelay[ch].setFadeLength (fade);
             dryDelay[ch].setFadeLength (fade);
-            laDelay[ch].setDelay (lookaheadSamples, immediate);
+            laDelay[ch].setDelay (lookaheadSamples + truePeakDelay(), immediate);
             dryDelay[ch].setDelay (total, immediate);
         }
         configureLookaheadShapers (true);
@@ -343,6 +363,9 @@ private:
         b.attackMs = params.attackMs;
         b.releaseMs = params.releaseMs;
         b.autoRelease = params.autoRelease;
+        b.shape = params.autoReleaseShape;
+        b.holdMs = params.holdMs;
+        releaseShape = ReleaseShapeTable::get (params.autoReleaseShape);
 
         // Feedback runs as a zero-delay loop (FeedbackSolver.h), which is stable for any
         // coefficient; the analog envelope pre-warps its coefficients by the loop gain k = R - 1
@@ -388,8 +411,10 @@ private:
         for (int ch = 0; ch < kMaxChannels; ++ch)
         {
             detDigital[ch].setMode (det);
-            detAnalog[ch].setMode (det);
+            // true peak needs future samples, so it cannot sit inside the zero-delay loop
+            detAnalog[ch].setMode (fb && det == DetectionMode::truePeak ? DetectionMode::peak : det);
         }
+        const bool adaptRelease = params.autoRelease;
 
         double* wetL = wet[0].data();
         double* wetR = wet[1].data();
@@ -444,9 +469,22 @@ private:
             double r[2] = { 0.0, 0.0 };
             double delayed[2] = { 0.0, 0.0 };
             const int procCh = stereo ? 2 : 1;
+            if (adaptRelease && --adaptCountdown <= 0)
+            {
+                adaptCountdown = kAdaptInterval;
+                for (int ch = 0; ch < procCh; ++ch)
+                {
+                    const double m = releaseShape.multiplier (smoothedReduction[ch], crest[ch].getCrestDb());
+                    envDigital[ch].setReleaseScale (m);
+                    envAnalog[ch].setReleaseScale (m);
+                }
+            }
+
             for (int ch = 0; ch < procCh; ++ch)
             {
                 delayed[ch] = laDelay[ch].process (p[ch]);
+                if (adaptRelease)
+                    crest[ch].process (s[ch]);
                 double rD = 0.0, rA = 0.0;
                 if (useD)
                 {
@@ -507,6 +545,7 @@ private:
                 const double g = r[ch] == 0.0 ? 1.0 : std::exp (-r[ch] * kLn10Over20);
                 p[ch] = delayed[ch] * g;
                 meters.gainReductionDb[ch] = std::max (meters.gainReductionDb[ch], r[ch]);
+                smoothedReduction[ch] = depthCoeff * smoothedReduction[ch] + (1.0 - depthCoeff) * r[ch];
                 avgReductionAccum += r[ch];
             }
             avgReduction = autoGainCoeff * avgReduction + (1.0 - autoGainCoeff) * (avgReductionAccum / procCh);
@@ -627,6 +666,9 @@ private:
     }
 
 public:
+    /** Current programme-dependent release multiplier of a channel (diagnostics). */
+    double getReleaseMultiplier (int ch) const noexcept { return envDigital[clampValue (ch, 0, kMaxChannels - 1)].getReleaseScale(); }
+
     /** Average number of loop evaluations per zero-delay feedback solve (diagnostics). */
     double getAverageSolverEvaluations() const noexcept
     {
@@ -679,6 +721,12 @@ private:
     } autoGainS;
 
     double antiMod[kMaxChannels] {};
+    CrestEstimator crest[kMaxChannels];
+    double smoothedReduction[kMaxChannels] {};
+    double depthCoeff = 0.0;
+    ReleaseShapeTable releaseShape = ReleaseShapeTable::get (AutoReleaseShape::program);
+    static constexpr int kAdaptInterval = 32;
+    int adaptCountdown = 0;
     double antiModCoeff = 0.0;
     double avgReduction = 0.0, avgReductionAccum = 0.0, autoGainCoeff = 0.0;
     double msIn = 0.0, msOut = 0.0, loudnessCoeff = 0.0;

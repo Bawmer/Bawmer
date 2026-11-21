@@ -1093,6 +1093,294 @@ TEST (feedbackSolverStress)
     CHECK (e->getAverageSolverEvaluations() < 8.0, "solver average %.2f evaluations", e->getAverageSolverEvaluations());
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// 14. true-peak detection
+TEST (truePeakInterpolatorAccuracy)
+{
+    // Against an ideal interpolator on the same 4x grid: <= 0.02 dB under-read up to 0.45·fs,
+    // never more than 0.02 dB over-read. (The grid itself may miss the crest by up to
+    // TruePeakInterpolator::gridBoundDb, the documented limit of 4x true-peak meters.)
+    const double fs = 48000.0;
+    TruePeakInterpolator tp;
+    std::mt19937 rng (1);
+    std::uniform_real_distribution<double> u (0.0, 2.0 * kPi);
+    double worstUnder = 0.0, worstOver = -1e9;
+    for (double frac = 0.002; frac <= 0.45; frac += 0.004)
+        for (int t = 0; t < 12; ++t)
+        {
+            tp.reset();
+            const double f = frac * fs, ph = u (rng);
+            double pk = 0.0, ideal = 0.0;
+            for (int n = 0; n < 300; ++n)
+            {
+                const double v = tp.process (std::sin (2.0 * kPi * f * n / fs + ph));
+                if (n <= 80)
+                    continue;
+                pk = std::max (pk, v);
+                for (int p = 0; p < 4; ++p)
+                    ideal = std::max (ideal, std::abs (std::sin (2.0 * kPi * f * (n - TruePeakInterpolator::kDelay + p / 4.0) / fs + ph)));
+            }
+            worstUnder = std::max (worstUnder, 20.0 * std::log10 (ideal / pk));
+            worstOver = std::max (worstOver, 20.0 * std::log10 (pk));
+        }
+    CHECK (worstUnder <= 0.02, "under-read vs ideal 4x grid %.3f dB", worstUnder);
+    CHECK (worstOver <= 0.02, "over-read %.3f dB", worstOver);
+
+    // the classic inter-sample case: fs/4 at 45 degrees — samples read -3.01 dB, true peak 0 dB
+    tp.reset();
+    double pk = 0.0;
+    for (int n = 0; n < 200; ++n)
+    {
+        const double v = tp.process (std::sin (0.5 * kPi * n + 0.25 * kPi));
+        if (n > 80)
+            pk = std::max (pk, v);
+    }
+    CHECK_NEAR (20.0 * std::log10 (pk), 0.0, 0.05);
+}
+
+TEST (truePeakEngineIntegration)
+{
+    const double fs = 48000.0;
+    // 1. fs/4 at 45 degrees, 0 dBTP but -3.01 dB sample peak; threshold -1.5 dB, 20:1.
+    //    Sample-peak detection misses it entirely; true peak compresses by ~1.4 dB.
+    auto grFor = [&] (DetectionMode det) {
+        CompressorParams p = transparentDefaults();
+        p.mode = EngineMode::digital;
+        p.thresholdDb = -1.5;
+        p.ratio = 20.0;
+        p.attackMs = 0.5;
+        p.releaseMs = 500.0;
+        p.detection = det;
+        auto e = makeEngine (fs, p);
+        Stereo s (48000);
+        for (size_t i = 0; i < s.size(); ++i)
+            s.l[i] = s.r[i] = std::sin (0.5 * kPi * static_cast<double> (i) + 0.25 * kPi);
+        run (*e, s);
+        return -3.0103 - 20.0 * std::log10 (peakAbs (s.l, s.size() - 4800, s.size()));
+    };
+    CHECK (std::abs (grFor (DetectionMode::peak)) < 0.01, "sample peak should not compress");
+    CHECK_NEAR (grFor (DetectionMode::truePeak), 1.5 * (1.0 - 1.0 / 20.0), 0.1);
+
+    // 2. latency grows by the detector delay; Ultra-mode null stays bit-exact
+    CompressorParams p = transparentDefaults();
+    p.detection = DetectionMode::truePeak;
+    p.thresholdDb = 0.0;
+    p.lookaheadMs = 1.0;
+    auto e = makeEngine (fs, p);
+    CHECK (e->getLatencySamples() == 48 + LevelDetector::kTruePeakDelay, "latency %d", e->getLatencySamples());
+    Stereo s = noise (48000, 0.05, 12);
+    const Stereo ref = s;
+    run (*e, s, 333);
+    const size_t lat = static_cast<size_t> (e->getLatencySamples());
+    double err = 0.0;
+    for (size_t i = lat; i < s.size(); ++i)
+        err = std::max (err, std::abs (s.l[i] - ref.l[i - lat]));
+    CHECK (err == 0.0, "true-peak null residual %.3g", err);
+
+    // 3. exact lookahead keeps its zero-overshoot guarantee with true-peak detection
+    CompressorParams q = transparentDefaults();
+    q.mode = EngineMode::digital;
+    q.detection = DetectionMode::truePeak;
+    q.thresholdDb = -20.0;
+    q.ratio = 20.0;
+    q.attackMs = 2.0;
+    q.releaseMs = 50.0;
+    q.lookaheadMs = 3.0;
+    auto e2 = makeEngine (fs, q);
+    Stereo b (48000);
+    for (size_t i = 0; i < b.size(); ++i)
+        b.l[i] = b.r[i] = 0.01 * std::sin (2.0 * kPi * 300.0 * i / fs) + ((i % 4800 < 24) ? std::sin (2.0 * kPi * 5000.0 * i / fs) : 0.0);
+    const Stereo bin = b;
+    run (*e2, b);
+    const size_t L = static_cast<size_t> (e2->getLatencySamples());
+    double worst = -1e9;
+    for (size_t i = L + 4800; i < b.size(); ++i)
+    {
+        const double x = std::abs (bin.l[i - L]);
+        if (x < 1e-4)
+            continue;
+        const double xd = 20.0 * std::log10 (x);
+        worst = std::max (worst, 20.0 * std::log10 (std::abs (b.l[i]) + 1e-300) - GainComputer::staticOutput (xd, -20.0, 20.0, 0.0));
+    }
+    CHECK (worst <= 1e-6, "true-peak + exact lookahead overshoot %.3f dB", worst);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 15. hold, adaptive release, smooth hybrid detector
+namespace
+{
+double thdPlusNoise30Hz (EngineMode mode, double holdMs)
+{
+    const double fs = 48000.0;
+    CompressorParams p = transparentDefaults();
+    p.mode = mode;
+    p.transformer = p.amplifier = false;
+    p.thresholdDb = -20.0;
+    p.ratio = 4.0;
+    p.attackMs = 0.1;
+    p.releaseMs = 30.0;
+    p.detection = DetectionMode::peak;
+    p.holdMs = holdMs;
+    auto e = makeEngine (fs, p, 480);
+    Stereo s = sine (fs, 30.0, 0.5, 48000 * 3);
+    run (*e, s, 480);
+    // last second = 30 whole periods: least-squares fundamental, then residual energy
+    const size_t a = s.size() - 48000;
+    double cc = 0.0, ss = 0.0;
+    for (size_t i = a; i < s.size(); ++i)
+    {
+        const double ph = 2.0 * kPi * 30.0 * static_cast<double> (i - a) / fs;
+        cc += s.l[i] * std::cos (ph);
+        ss += s.l[i] * std::sin (ph);
+    }
+    cc *= 2.0 / 48000.0;
+    ss *= 2.0 / 48000.0;
+    double res = 0.0, fund = 0.0;
+    for (size_t i = a; i < s.size(); ++i)
+    {
+        const double ph = 2.0 * kPi * 30.0 * static_cast<double> (i - a) / fs;
+        const double f = cc * std::cos (ph) + ss * std::sin (ph);
+        res += (s.l[i] - f) * (s.l[i] - f);
+        fund += f * f;
+    }
+    return 10.0 * std::log10 (res / fund + 1e-300);
+}
+
+/** ms from the end of a 1 kHz burst until gain reduction is below 1 dB. */
+double recoveryMs (bool autoRel, AutoReleaseShape shape, double burstMs, double burstDb, bool transient)
+{
+    const double fs = 48000.0;
+    CompressorParams p = transparentDefaults();
+    p.mode = EngineMode::digital;
+    p.thresholdDb = -30.0;
+    p.ratio = 4.0;
+    p.attackMs = 2.0;
+    p.releaseMs = 400.0;
+    p.detection = DetectionMode::rms;
+    p.autoRelease = autoRel;
+    p.autoReleaseShape = shape;
+    auto e = makeEngine (fs, p, 480);
+    const size_t start = 4800, burst = static_cast<size_t> (burstMs * 48.0);
+    Stereo s (start + burst + 48000 * 6 + 480 - (start + burst) % 480);
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        double a = dbToGain (-40.0);
+        if (i >= start && i < start + burst)
+        {
+            a = dbToGain (burstDb);
+            if (transient)
+                a *= (i % 4800 < 240) ? 2.5 : 0.35; // 5 ms hits every 100 ms: high crest factor
+        }
+        s.l[i] = s.r[i] = a * std::sin (2.0 * kPi * 1000.0 * i / fs);
+    }
+    const Stereo in = s;
+    run (*e, s, 480);
+    for (size_t i = start + burst; i + 48 < s.size(); i += 48)
+    {
+        double ei = 0.0, eo = 0.0;
+        for (size_t k = 0; k < 48; ++k)
+        {
+            ei += in.l[i + k] * in.l[i + k];
+            eo += s.l[i + k] * s.l[i + k];
+        }
+        if (10.0 * std::log10 (ei / (eo + 1e-300)) < 1.0)
+            return static_cast<double> (i - start - burst) / 48.0;
+    }
+    return 1e9;
+}
+} // namespace
+
+TEST (holdRemovesLowFrequencyRipple)
+{
+    // Peak detection on a 30 Hz sine: the rectified target peaks every 1/(2f) = 16.7 ms. With
+    // no hold, a 30 ms release lets the gain ripple between peaks (heavy LF distortion); a hold
+    // of at least 1/(2f) freezes the gain between peaks and the steady-state distortion vanishes.
+    for (auto mode : { EngineMode::digital, EngineMode::analog })
+    {
+        const double noHold = thdPlusNoise30Hz (mode, 0.0);
+        const double held = thdPlusNoise30Hz (mode, 1000.0 / 60.0 + 1.0);
+        CHECK (noHold > -40.0, "mode %d: expected audible ripple without hold, got %.1f dB", (int) mode, noHold);
+        CHECK (held < -120.0, "mode %d: THD+N with hold %.1f dB", (int) mode, held);
+    }
+}
+
+TEST (adaptiveReleaseProgramDependence)
+{
+    using S = AutoReleaseShape;
+    // duration: longer compression -> slower recovery
+    const double r10 = recoveryMs (true, S::program, 10.0, -6.0, false);
+    const double r300 = recoveryMs (true, S::program, 300.0, -6.0, false);
+    const double r3000 = recoveryMs (true, S::program, 3000.0, -6.0, false);
+    CHECK (r10 < r300 && r300 < r3000, "duration: %.0f / %.0f / %.0f ms", r10, r300, r3000);
+    // depth: deeper sustained reduction -> slower recovery
+    const double shallow = recoveryMs (true, S::program, 3000.0, -18.0, false);
+    CHECK (shallow < r3000, "depth: shallow %.0f ms vs deep %.0f ms", shallow, r3000);
+    // crest: transient material recovers faster than dense material with the same peaks
+    const double transient = recoveryMs (true, S::program, 3000.0, -6.0, true);
+    CHECK (transient < 0.6 * r3000, "crest: transient %.0f ms vs dense %.0f ms", transient, r3000);
+    // shapes after a short burst: Fast < Program < Smooth
+    const double f10 = recoveryMs (true, S::fast, 10.0, -6.0, false);
+    const double s10 = recoveryMs (true, S::smooth, 10.0, -6.0, false);
+    CHECK (f10 < r10 && r10 < s10, "short burst: fast %.0f, program %.0f, smooth %.0f ms", f10, r10, s10);
+}
+
+TEST (adaptiveReleaseMultiplierIsSlow)
+{
+    // The release multiplier is derived from smoothed quantities only: on a strongly dynamic
+    // signal it must stay within its bounds and never jump between updates (32 samples).
+    const double fs = 48000.0;
+    CompressorParams p = transparentDefaults();
+    p.mode = EngineMode::digital;
+    p.thresholdDb = -30.0;
+    p.ratio = 4.0;
+    p.attackMs = 1.0;
+    p.releaseMs = 300.0;
+    p.autoRelease = true;
+    p.autoReleaseShape = AutoReleaseShape::program;
+    auto e = makeEngine (fs, p, 32);
+    Stereo s = noise (static_cast<size_t> (fs * 4), 0.3, 21);
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        const double env = (i / 2400) % 2 ? 1.0 : 0.02; // 50 ms on/off gating
+        s.l[i] *= env;
+        s.r[i] *= env;
+    }
+    double prev = e->getReleaseMultiplier (0), worstStep = 0.0, lo = 1e9, hi = 0.0;
+    for (size_t pos = 0; pos < s.size(); pos += 32)
+    {
+        double* io[2] = { s.l.data() + pos, s.r.data() + pos };
+        e->process (io, 2, nullptr, 0, 32);
+        const double m = e->getReleaseMultiplier (0);
+        worstStep = std::max (worstStep, std::abs (m - prev) / prev);
+        lo = std::min (lo, m);
+        hi = std::max (hi, m);
+        prev = m;
+    }
+    CHECK (lo >= 1.0 / 3.0 - 1e-12 && hi <= 3.0 + 1e-12, "multiplier range %.3f..%.3f", lo, hi);
+    CHECK (worstStep < 0.02, "multiplier jumped by %.2f %% in one update", 100.0 * worstStep);
+}
+
+TEST (hybridDetectorIsSmooth)
+{
+    // Soft maximum a + softplus(b - a): C-infinity, equals RMS when peaks are well inside the
+    // crest allowance, and stays within ln2/k = 0.35 dB of a hard max.
+    double prevSlope = 0.0, worstJump = 0.0, worstGap = 0.0;
+    for (double z = -20.0; z <= 20.0; z += 0.01)
+    {
+        const double v = LevelDetector::softplus (z);
+        const double slope = (LevelDetector::softplus (z + 1e-5) - v) / 1e-5;
+        if (z > -20.0)
+            worstJump = std::max (worstJump, std::abs (slope - prevSlope));
+        prevSlope = slope;
+        worstGap = std::max (worstGap, v - std::max (0.0, z));
+        CHECK (slope >= -1e-9 && slope <= 1.0 + 1e-9, "slope %.6f at %.2f", slope, z);
+    }
+    CHECK (worstJump < 0.011, "slope discontinuity %.4f", worstJump);
+    CHECK (worstGap <= std::log (2.0) / 2.0 + 1e-9, "gap to hard max %.4f dB", worstGap);
+    CHECK (LevelDetector::softplus (-6.0) < 1e-5, "RMS calibration disturbed: %.3g dB", LevelDetector::softplus (-6.0));
+}
+
 // ---------------------------------------------------------------------------------------------
 int main()
 {

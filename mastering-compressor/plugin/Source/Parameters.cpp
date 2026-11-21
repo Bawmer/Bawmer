@@ -58,13 +58,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (std::make_unique<APB> (juce::ParameterID { ids::scLpfOn, 1 }, "SC LPF On", false));
     layout.add (floatParam (ids::scLpf, "SC LPF", logRange (1000.0f, 20000.0f, 5000.0f), 16000.0f, fmtHz, "Hz"));
 
-    layout.add (std::make_unique<APB> (juce::ParameterID { ids::autoRelease, 1 }, "Auto Release", false));
+    layout.add (std::make_unique<APC> (juce::ParameterID { ids::releaseMode, 1 }, "Release Mode",
+                                       juce::StringArray { "Manual", "Auto Smooth", "Auto Program", "Auto Fast" }, 0));
+    layout.add (floatParam (ids::hold, "Hold", { 0.0f, 50.0f, 0.01f }, 0.0f, fmtMs, "ms"));
     layout.add (std::make_unique<APB> (juce::ParameterID { ids::autoGain, 1 }, "Auto Gain", false));
     layout.add (floatParam (ids::lookahead, "Lookahead", { 0.0f, 20.0f, 0.01f }, 0.0f, fmtMs, "ms"));
     layout.add (std::make_unique<APC> (juce::ParameterID { ids::lookaheadMode, 1 }, "Lookahead Mode",
                                        juce::StringArray { "Exact (no overshoot)", "Classic (early attack)" }, 0));
     layout.add (std::make_unique<APC> (juce::ParameterID { ids::detection, 1 }, "Detection",
-                                       juce::StringArray { "Peak", "RMS", "Hybrid" }, 1));
+                                       juce::StringArray { "Peak", "RMS", "Hybrid", "True Peak" }, 1));
     layout.add (std::make_unique<APB> (juce::ParameterID { ids::extSc, 1 }, "External Sidechain", false));
     layout.add (std::make_unique<APC> (juce::ParameterID { ids::channelMode, 1 }, "Channel Mode",
                                        juce::StringArray { "Stereo", "Dual Mono", "Mid/Side" }, 0));
@@ -102,7 +104,8 @@ ParameterReader::ParameterReader (juce::AudioProcessorValueTreeState& s)
     scHpf = get (s, ids::scHpf);
     scLpfOn = get (s, ids::scLpfOn);
     scLpf = get (s, ids::scLpf);
-    autoRelease = get (s, ids::autoRelease);
+    releaseMode = get (s, ids::releaseMode);
+    hold = get (s, ids::hold);
     autoGain = get (s, ids::autoGain);
     lookahead = get (s, ids::lookahead);
     lookaheadMode = get (s, ids::lookaheadMode);
@@ -149,11 +152,16 @@ CompressorParams ParameterReader::read() const noexcept
     p.scHpfHz = f (scHpf);
     p.scLpfOn = b (scLpfOn);
     p.scLpfHz = f (scLpf);
-    p.autoRelease = b (autoRelease);
+    {
+        const int rm = juce::jlimit (0, 3, i (releaseMode));
+        p.autoRelease = rm > 0;
+        p.autoReleaseShape = static_cast<AutoReleaseShape> (juce::jmax (0, rm - 1));
+    }
+    p.holdMs = f (hold);
     p.autoGain = b (autoGain);
     p.lookaheadMs = f (lookahead);
     p.lookaheadMode = static_cast<LookaheadMode> (juce::jlimit (0, 1, i (lookaheadMode)));
-    p.detection = static_cast<DetectionMode> (juce::jlimit (0, 2, i (detection)));
+    p.detection = static_cast<DetectionMode> (juce::jlimit (0, 3, i (detection)));
     p.externalSidechain = b (extSc);
     p.channelMode = static_cast<ChannelMode> (juce::jlimit (0, 2, i (channelMode)));
     p.topology = static_cast<Topology> (juce::jlimit (0, 1, i (topology)));
