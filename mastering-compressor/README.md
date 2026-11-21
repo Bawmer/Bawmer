@@ -59,7 +59,8 @@ ctest --test-dir build -C Release --output-on-failure
   libxext-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`
 
 Plugins are written to `build/LumenMC64_artefacts/Release/{VST3,AU,Standalone}`.
-`.github/workflows/mastering-compressor.yml` builds and tests on Windows, macOS and Linux.
+`.github/workflows/mastering-compressor.yml` builds, runs the DSP tests and validates the
+plugins with pluginval (and auval on macOS) on Windows, macOS and Linux.
 
 ---
 
@@ -219,7 +220,9 @@ about 3 % for the per-sample loop solve.
 
 * **AU and Windows builds** are set up (CMake + CI matrix) but have only been compiled on
   Linux so far. The first CI run will confirm them.
-* **pluginval / auval** are not in the test suite yet. Run them on the built binaries before release.
+* **pluginval / auval** run in CI: pluginval v1.0.4 at strictness 10 on the VST3 (Windows, Linux,
+  macOS), plus `auval -strict` on the AU (macOS). The macOS job needs macOS runners to be
+  available on the GitHub account.
 * **Sample-accurate automation**: parameters are read per block and ramped per sample. That is
   click-free, but it isn't sample-accurate when a host splits automation within a block.
 * **Latency-changing parameters** (lookahead, oversampling factor, switching colour on or off)
