@@ -1,3 +1,4 @@
+#include <memory>
 // Renders the editor to a PNG while program material runs through the processor.
 // Developer tool used to verify metering / displays without a DAW:  lumen_ui_snapshot out.png [mode]
 #include "../plugin/Source/PluginEditor.h"
@@ -9,7 +10,9 @@ int main (int argc, char** argv)
     const juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argc > 1 ? argv[1] : "snapshot.png"));
     const int mode = argc > 2 ? juce::String (argv[2]).getIntValue() : 3;
 
-    lumen::LumenAudioProcessor proc;
+    auto procOwner = std::make_unique<lumen::LumenAudioProcessor>(); // heap: the engine holds MBs of
+
+    auto& proc = *procOwner;        // preallocated buffers (Windows stacks are 1 MB)
     auto set = [&] (const char* id, float v) {
         auto* p = proc.apvts.getParameter (id);
         p->setValueNotifyingHost (p->convertTo0to1 (v));

@@ -3,6 +3,7 @@
 #include "../plugin/Source/PluginProcessor.h"
 
 #include <cstdio>
+#include <memory>
 #include <thread>
 
 namespace
@@ -43,7 +44,8 @@ void guiEdit (lumen::LumenAudioProcessor& p, const char* id, std::initializer_li
 
 void testUndoIgnoresAutomation()
 {
-    lumen::LumenAudioProcessor p;
+    auto pOwner = std::make_unique<lumen::LumenAudioProcessor>(); // heap: the engine holds MBs of
+    auto& p = *pOwner;        // preallocated buffers (Windows stacks are 1 MB)
     for (int i = 0; i < 50; ++i)
     {
         hostAutomate (p, lumen::ids::threshold, -30.0f + 0.5f * (float) i);
@@ -54,7 +56,8 @@ void testUndoIgnoresAutomation()
 
 void testGuiEditsAreUndoable()
 {
-    lumen::LumenAudioProcessor p;
+    auto pOwner = std::make_unique<lumen::LumenAudioProcessor>(); // heap: the engine holds MBs of
+    auto& p = *pOwner;        // preallocated buffers (Windows stacks are 1 MB)
     const float before = value (p, lumen::ids::threshold);
     guiEdit (p, lumen::ids::threshold, { -20.0f, -25.0f, -30.0f }); // one drag
     EXPECT (p.undoManager.canUndo(), "GUI edit not recorded");
@@ -70,7 +73,8 @@ void testGuiEditsAreUndoable()
 
 void testPresetLoadAndABAreSingleSteps()
 {
-    lumen::LumenAudioProcessor p;
+    auto pOwner = std::make_unique<lumen::LumenAudioProcessor>(); // heap: the engine holds MBs of
+    auto& p = *pOwner;        // preallocated buffers (Windows stacks are 1 MB)
     const float thr0 = value (p, lumen::ids::threshold), ratio0 = value (p, lumen::ids::ratio);
     p.presets.loadPreset (1); // touches many parameters
     EXPECT (std::abs (value (p, lumen::ids::threshold) - thr0) > 0.1f, "preset did not change threshold");
@@ -90,14 +94,16 @@ void testStateRoundTrip()
 {
     juce::MemoryBlock blob;
     {
-        lumen::LumenAudioProcessor p;
+        auto pOwner = std::make_unique<lumen::LumenAudioProcessor>(); // heap: the engine holds MBs of
+        auto& p = *pOwner;        // preallocated buffers (Windows stacks are 1 MB)
         p.presets.loadPreset (3);
         guiEdit (p, lumen::ids::knee, { 9.0f });
         p.switchToSlot (1);
         guiEdit (p, lumen::ids::ratio, { 7.0f });
         p.getStateInformation (blob);
     }
-    lumen::LumenAudioProcessor q;
+    auto qOwner = std::make_unique<lumen::LumenAudioProcessor>(); // heap: the engine holds MBs of
+    auto& q = *qOwner;        // preallocated buffers (Windows stacks are 1 MB)
     q.setStateInformation (blob.getData(), (int) blob.getSize());
     pump();
     EXPECT (q.presets.getCurrentIndex() == 3, "preset index restored as %d", q.presets.getCurrentIndex());
@@ -111,7 +117,8 @@ void testStateRoundTrip()
 void testStateSaveIsSafeAgainstABSwitching()
 {
     // smoke test for the A/B lock: a "host" thread saves state while the UI flips A/B
-    lumen::LumenAudioProcessor p;
+    auto pOwner = std::make_unique<lumen::LumenAudioProcessor>(); // heap: the engine holds MBs of
+    auto& p = *pOwner;        // preallocated buffers (Windows stacks are 1 MB)
     std::atomic<bool> stop { false };
     std::atomic<int> saves { 0 };
     std::thread host ([&] {
