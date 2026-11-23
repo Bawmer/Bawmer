@@ -36,18 +36,17 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Engine tests
-        continue-on-error: true
         run: build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
 
       - name: Host smoke test (loads the .vst3 like a DAW)
-        continue-on-error: true
         shell: pwsh
         run: |
           & build\VoxForgeHostTest_artefacts\Release\VoxForgeHostTest.exe build\VoxForge_artefacts\Release\VST3\VoxForge.vst3
           "exit code: $LASTEXITCODE"
           exit $LASTEXITCODE
 
-      - name: Diagnostics - crash stack under cdb
+      - name: Diagnostics - crash stack under cdb (only if the host test failed)
+        if: failure()
         continue-on-error: true
         shell: pwsh
         run: |
