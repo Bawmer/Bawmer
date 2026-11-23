@@ -31,11 +31,14 @@ static void pump (int ms)
 
 int main (int argc, char** argv)
 {
+    std::cout << std::unitbuf;            // unbuffered: keep output even if the process dies
+    std::cout << "VoxForgeHostTest starting" << std::endl;
     juce::ScopedJuceInitialiser_GUI init;
     if (argc < 2) { std::cout << "usage: VoxForgeHostTest <VoxForge.vst3> [shots-dir]\n"; return 2; }
 
     juce::VST3PluginFormat fmt;
     juce::OwnedArray<juce::PluginDescription> descs;
+    std::cout << "  scanning " << argv[1] << std::endl;
     fmt.findAllTypesForFile (descs, argv[1]);
     CHECK (descs.size() == 1, "VST3 module scanned");
     if (descs.isEmpty()) return 1;
@@ -45,6 +48,7 @@ int main (int argc, char** argv)
     CHECK (d.isInstrument, "registered as instrument");
 
     juce::String err;
+    std::cout << "  creating instance" << std::endl;
     auto plugin = fmt.createInstanceFromDescription (d, 48000.0, 512, err);
     CHECK (plugin != nullptr, "instance created " + err);
     if (plugin == nullptr) return 1;

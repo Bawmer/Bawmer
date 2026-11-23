@@ -41,7 +41,20 @@ jobs:
 
       - name: Host smoke test (loads the .vst3 like a DAW)
         continue-on-error: true
-        run: build\VoxForgeHostTest_artefacts\Release\VoxForgeHostTest.exe build\VoxForge_artefacts\Release\VST3\VoxForge.vst3
+        shell: pwsh
+        run: |
+          & build\VoxForgeHostTest_artefacts\Release\VoxForgeHostTest.exe build\VoxForge_artefacts\Release\VST3\VoxForge.vst3
+          "exit code: $LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      - name: Diagnostics - VST3 module info helper
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          & build\Release\juce_vst3_helper.exe -create -version 1.0.0 -path build\VoxForge_artefacts\Release\VST3\VoxForge.vst3 -output moduleinfo-test.json
+          "exit code: $LASTEXITCODE"
+          if (Test-Path moduleinfo-test.json) { Get-Content moduleinfo-test.json }
+          Get-ChildItem build\VoxForge_artefacts\Release\VST3\VoxForge.vst3 -Recurse | Select-Object FullName, Length
 
       - name: Assemble package
         shell: pwsh
