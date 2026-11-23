@@ -72,7 +72,7 @@ struct NeuralBackend::Impl
 {
     std::unique_ptr<Ort::Env> env;
     std::unique_ptr<Ort::Session> content, voice;
-    Ort::SessionOptions options;
+    std::unique_ptr<Ort::SessionOptions> options;   // created only after the ORT API is initialised
     std::string contentIn, contentOut, voiceUnits, voiceF0, voiceOut;
 
     bool init (juce::String& error)
@@ -80,8 +80,9 @@ struct NeuralBackend::Impl
         if (env != nullptr) return true;
         if (! ensureOrtLoaded (error)) return false;
         env = std::make_unique<Ort::Env> (ORT_LOGGING_LEVEL_WARNING, "VoxForge");
-        options.SetIntraOpNumThreads (juce::jmax (1, juce::SystemStats::getNumPhysicalCpus() - 1));
-        options.SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
+        options = std::make_unique<Ort::SessionOptions>();
+        options->SetIntraOpNumThreads (juce::jmax (1, juce::SystemStats::getNumPhysicalCpus() - 1));
+        options->SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
         return true;
     }
 
@@ -90,9 +91,9 @@ struct NeuralBackend::Impl
         try
         {
            #if JUCE_WINDOWS
-            return std::make_unique<Ort::Session> (*env, f.getFullPathName().toWideCharPointer(), options);
+            return std::make_unique<Ort::Session> (*env, f.getFullPathName().toWideCharPointer(), *options);
            #else
-            return std::make_unique<Ort::Session> (*env, f.getFullPathName().toRawUTF8(), options);
+            return std::make_unique<Ort::Session> (*env, f.getFullPathName().toRawUTF8(), *options);
            #endif
         }
         catch (const Ort::Exception& e)
