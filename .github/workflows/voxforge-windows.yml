@@ -18,13 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download ONNX Runtime
+      - name: Download ONNX Runtime (official NuGet package)
         shell: pwsh
         run: |
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip"
-          Invoke-WebRequest $url -OutFile ort.zip
-          Expand-Archive ort.zip -DestinationPath .
-          "ORT_ROOT=$pwd\onnxruntime-win-x64-$env:ORT_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/$env:ORT_VERSION" -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort
+          Get-ChildItem ort\build\native\include, ort\runtimes\win-x64\native | Select-Object -ExpandProperty FullName
+          "ORT_ROOT=$pwd\ort" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure
         shell: pwsh
@@ -48,7 +48,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
           Copy-Item -Recurse build\VoxForge_artefacts\Release\VST3\VoxForge.vst3 $pkg
           Copy-Item build\VoxForge_artefacts\Release\Standalone\VoxForge.exe $pkg
-          Copy-Item "$env:ORT_ROOT\lib\*.dll" $pkg
+          Copy-Item "$env:ORT_ROOT\runtimes\win-x64\native\*.dll" $pkg
           Copy-Item -Recurse VoxForge\engine "$pkg\engine"
           Copy-Item VoxForge\scripts\install_engine.ps1 $pkg
           Copy-Item VoxForge\docs\USER_MANUAL.md $pkg

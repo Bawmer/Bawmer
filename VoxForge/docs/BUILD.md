@@ -34,9 +34,9 @@ the host smoke test, and prints the path of `VoxForge.vst3`.
 ### Manual CMake
 
 ```powershell
-# optional: ONNX Runtime CPU package (include/ + lib/), e.g. onnxruntime-win-x64-1.20.1.zip from the ORT releases
+# optional: ONNX Runtime, e.g. the NuGet package https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.20.1 unzipped
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-      -DVOXFORGE_WITH_ONNX=ON -DONNXRUNTIME_ROOT=C:/libs/onnxruntime-win-x64-1.20.1 `
+      -DVOXFORGE_WITH_ONNX=ON -DONNXRUNTIME_ROOT=C:/libs/onnxruntime-1.20.1 `
       -DVOXFORGE_BUILD_TESTS=ON
 cmake --build build --config Release --parallel
 ```

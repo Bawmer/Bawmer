@@ -18,13 +18,13 @@ New-Item -ItemType Directory -Force -Path $build, $deps | Out-Null
 $cmakeArgs = @("-S", $root, "-B", $build, "-G", "Visual Studio 17 2022", "-A", "x64", "-DVOXFORGE_BUILD_TESTS=ON")
 
 if (-not $NoOnnx) {
-    $ortDir = Join-Path $deps "onnxruntime-win-x64-$OrtVersion"
+    $ortDir = Join-Path $deps "onnxruntime-$OrtVersion"
     if (-not (Test-Path $ortDir)) {
         $zip = Join-Path $deps "ort.zip"
-        $url = "https://github.com/microsoft/onnxruntime/releases/download/v$OrtVersion/onnxruntime-win-x64-$OrtVersion.zip"
-        Write-Host "Downloading ONNX Runtime $OrtVersion ..."
+        $url = "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/$OrtVersion"
+        Write-Host "Downloading ONNX Runtime $OrtVersion (NuGet) ..."
         Invoke-WebRequest $url -OutFile $zip
-        Expand-Archive $zip -DestinationPath $deps -Force
+        Expand-Archive $zip -DestinationPath $ortDir -Force
     }
     $cmakeArgs += @("-DVOXFORGE_WITH_ONNX=ON", "-DONNXRUNTIME_ROOT=$ortDir")
 }
