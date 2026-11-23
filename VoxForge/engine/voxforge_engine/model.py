@@ -216,6 +216,7 @@ def export_voice_onnx(G_state: dict, path: str, opset: int = 17, config: dict | 
     model = VoiceOnnx(net).eval()
     units = torch.randn(1, 50, 768)
     f0 = torch.full((1, 50), 220.0)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = path + ".tmp"
     with torch.no_grad():
         onnx_export(model, (units, f0), tmp, input_names=["units", "f0"], output_names=["audio"],
