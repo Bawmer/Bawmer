@@ -39,7 +39,7 @@ jobs:
           grep -q '"type": "result"' transcribe.jsonl
       - name: Lyrics extraction - plug-in C++ path (StemAnalyzer -> engine -> words on notes)
         run: |
-          sudo apt-get install -y -qq pkg-config libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev mesa-common-dev ninja-build
+          sudo apt-get install -y -qq pkg-config libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev libfontconfig1-dev mesa-common-dev ninja-build
           # setup-python overrides PKG_CONFIG_PATH; JUCE finds freetype/alsa through pkg-config
           export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
           export CPATH="/usr/include/freetype2${CPATH:+:$CPATH}"
