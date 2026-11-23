@@ -126,7 +126,8 @@ PresetsTab::PresetsTab (VoxForgeProcessor& p) : proc (p)
     testEngineBtn.onClick = [this]
     {
         statusLabel.setText ("Testing engine...", juce::dontSendNotification);
-        juce::Thread::launch ([sp = juce::Component::SafePointer<PresetsTab> (this)]
+        juce::Component::SafePointer<PresetsTab> sp (this);   // (MSVC: no 'this' in a nested init-capture)
+        juce::Thread::launch ([sp]
         {
             auto o = EngineClient::run ({ "check", "--models-dir", Paths::modelsDir().getFullPathName() }, nullptr, nullptr);
             juce::String text = o.ok ? "Engine OK: " + o.result.getProperty ("summary", "").toString() : "Engine error: " + o.error;
