@@ -41,16 +41,18 @@ $hasNvidia = $false
 if (-not $Cpu) { try { nvidia-smi | Out-Null; $hasNvidia = ($LASTEXITCODE -eq 0) } catch {} }
 if ($hasNvidia) {
     Write-Host "NVIDIA GPU detected - installing CUDA PyTorch" -ForegroundColor Green
-    & $vpy -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    & $vpy -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 } else {
     Write-Host "Installing CPU PyTorch (training will be slow; transcription is fine)" -ForegroundColor Yellow
-    & $vpy -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+    & $vpy -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 }
 & $vpy -m pip install $engineSrc
 
 $engine = Join-Path $venv "Scripts\voxforge-engine.exe"
 Write-Host "Exporting the shared content encoder (HuBERT, downloads ~360 MB once)..."
 & $engine export-content-encoder --models-dir $models
+Write-Host "Downloading the pretrained RVC v2 48 kHz base model (~220 MB, MIT license)..."
+& $engine download-base --models-dir $models
 
 $dict = Join-Path $data "cmudict.dict"
 if (-not (Test-Path $dict)) {

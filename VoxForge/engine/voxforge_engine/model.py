@@ -1,244 +1,219 @@
-"""VoxForge neural voice model.
+"""VoxForge neural voice = RVC v2 48 kHz (SynthesizerTrnMs768NSFsid) fine-tuned on the user's singing.
 
-Generator  (exported to voice.onnx):
-    units [B, T, 768] + f0 [B, T] (Hz, 0 = unvoiced)  ->  audio [B, T * 960] @ 48 kHz
+Why RVC v2: it is the most widely used open singing-voice-conversion architecture,
+it is MIT licensed, and an official pretrained 48 kHz base model exists (trained on
+many speakers) - so a few minutes of the user's voice give a natural result instead
+of training from scratch.
 
-    units ─ Linear ─┐
-    f0 ── log-bin ──┴─ Embedding ─ +  ─ dilated conv stack ─ HiFi-GAN upsampler (x8 x6 x4 x5) ─ tanh
-                                                  ▲          ▲  (neural source-filter excitation
-    f0 ── sample-rate sine harmonics + noise ─────┴──────────┘   injected at every resolution)
+Shapes (all at 48 kHz):
+    content units  : HuBERT-Base layer 12, 768-dim, 50 frames/s  -> interpolated x2 to 100 frames/s
+    f0             : Hz at 100 frames/s (hop 480 @ 48 kHz), 0 = unvoiced
+    audio          : 480 samples per 100 Hz frame
 
-Discriminators (training only): multi-period (2,3,5,7,11) + multi-scale.
-This is the same family of architecture used by modern singing-voice
-conversion systems (NSF-HiFiGAN), sized for consumer GPUs.
+Plug-in contract (voice.onnx), unchanged for the C++ side:
+    units [1, T, 768] @ 50 fps, f0 [1, T] (Hz) @ 50 fps  ->  audio [1, T * 960]
 """
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import remove_weight_norm, weight_norm
 
 SR = 48000
-HOP = 960
-UPSAMPLE = (8, 6, 4, 5)
-UPSAMPLE_K = (16, 12, 8, 11)
-F0_BINS = 256
+HOP = 480                      # model frame = 10 ms
+SEGMENT = 17280                # training slice in samples (36 frames), as in RVC 48k_v2
+N_FFT = 2048
+N_MELS = 128
+BASE_URLS = {
+    "f0G48k.pth": "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/pretrained_v2/f0G48k.pth",
+    "f0D48k.pth": "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/pretrained_v2/f0D48k.pth",
+}
+
+# RVC configs/v2/48k.json "model" section, as positional args of SynthesizerTrnMs768NSFsid
+MODEL_ARGS = dict(
+    spec_channels=N_FFT // 2 + 1, segment_size=SEGMENT // HOP, inter_channels=192, hidden_channels=192,
+    filter_channels=768, n_heads=2, n_layers=6, kernel_size=3, p_dropout=0, resblock="1",
+    resblock_kernel_sizes=[3, 7, 11], resblock_dilation_sizes=[[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+    upsample_rates=[12, 10, 2, 2], upsample_initial_channel=512, upsample_kernel_sizes=[24, 20, 4, 4],
+    spk_embed_dim=109, gin_channels=256, sr=SR,
+)
+
 F0_MEL_MIN = 1127 * math.log(1 + 50 / 700)
 F0_MEL_MAX = 1127 * math.log(1 + 1100 / 700)
 
 
 def f0_to_coarse(f0: torch.Tensor) -> torch.Tensor:
-    """Hz -> integer bin 1..255 on a mel scale, 0 = unvoiced."""
+    """Hz -> RVC pitch bins 1..255 (0 for unvoiced handled by the 1-floor like RVC)."""
     mel = 1127 * torch.log(1 + f0 / 700)
-    b = (mel - F0_MEL_MIN) * (F0_BINS - 2) / (F0_MEL_MAX - F0_MEL_MIN) + 1
-    b = torch.clamp(b, 1, F0_BINS - 1)
-    return torch.where(f0 > 0, b, torch.zeros_like(b)).round().long()
+    mel = torch.where(mel > 0, (mel - F0_MEL_MIN) * 254 / (F0_MEL_MAX - F0_MEL_MIN) + 1, mel)
+    mel = torch.clamp(mel, 1, 255)
+    return torch.round(mel).long()
 
 
-def init_weights(m, std=0.01):
-    if isinstance(m, (nn.Conv1d, nn.ConvTranspose1d)):
-        m.weight.data.normal_(0.0, std)
+def build_generator():
+    from .rvc.models import SynthesizerTrnMs768NSFsid
+    return SynthesizerTrnMs768NSFsid(**MODEL_ARGS, is_half=False)
 
 
-class ResBlock(nn.Module):
-    def __init__(self, ch, k, dilations=(1, 3, 5)):
-        super().__init__()
-        self.c1 = nn.ModuleList([weight_norm(nn.Conv1d(ch, ch, k, dilation=d, padding=(k * d - d) // 2)) for d in dilations])
-        self.c2 = nn.ModuleList([weight_norm(nn.Conv1d(ch, ch, k, padding=(k - 1) // 2)) for _ in dilations])
-        self.c1.apply(init_weights)
-        self.c2.apply(init_weights)
-
-    def forward(self, x):
-        for a, b in zip(self.c1, self.c2):
-            x = x + b(F.leaky_relu(a(F.leaky_relu(x, 0.1)), 0.1))
-        return x
-
-    def remove_wn(self):
-        for c in list(self.c1) + list(self.c2):
-            remove_weight_norm(c)
+def build_discriminator():
+    from .rvc.models import MultiPeriodDiscriminatorV2
+    return MultiPeriodDiscriminatorV2(False)
 
 
-class SineSource(nn.Module):
-    """Neural source-filter excitation: harmonic sines for voiced, noise for unvoiced."""
-
-    def __init__(self, harmonics=8, amp=0.1, noise=0.003):
-        super().__init__()
-        self.h = harmonics
-        self.amp = amp
-        self.noise = noise
-        self.merge = nn.Linear(harmonics, 1)
-
-    def forward(self, f0_up):                          # [B, N] Hz at 48 kHz
-        k = torch.arange(1, self.h + 1, device=f0_up.device, dtype=f0_up.dtype)
-        inc = f0_up[..., None] * k / SR                # cycles per sample per harmonic
-        phase = torch.cumsum(inc, dim=1)
-        phase = phase - torch.floor(phase)             # keep precision
-        sines = torch.sin(2 * math.pi * phase) * self.amp
-        uv = (f0_up > 0).to(f0_up.dtype)[..., None]
-        n = torch.randn_like(sines)
-        sig = sines * uv + n * (uv * self.noise + (1 - uv) * self.amp / 3)
-        sig = sig * (k <= (SR / 2) / torch.clamp(f0_up[..., None], min=1.0)).to(sig.dtype)   # no aliasing
-        return torch.tanh(self.merge(sig)).transpose(1, 2)   # [B, 1, N]
+#----------------------------------------------------------------------------- base model
+def base_paths(models_dir: str):
+    d = os.path.join(models_dir, "base")
+    return {k: os.path.join(d, k) for k in BASE_URLS}, os.path.join(d, "base.pt")
 
 
-class Generator(nn.Module):
-    def __init__(self, unit_dim=768, hidden=256, ch=512, resblock_k=(3, 7, 11)):
-        super().__init__()
-        self.unit_proj = nn.Linear(unit_dim, hidden)
-        self.f0_emb = nn.Embedding(F0_BINS, hidden)
-        self.enc = nn.ModuleList([nn.Conv1d(hidden, hidden, 5, padding=2 * d, dilation=d) for d in (1, 2, 4, 1, 2, 4)])
-        self.enc_norm = nn.ModuleList([nn.GroupNorm(1, hidden) for _ in range(6)])
-        self.pre = weight_norm(nn.Conv1d(hidden, ch, 7, padding=3))
-        self.source = SineSource()
-
-        self.ups = nn.ModuleList()
-        self.noise_convs = nn.ModuleList()
-        self.res = nn.ModuleList()
-        c = ch
-        for i, (u, k) in enumerate(zip(UPSAMPLE, UPSAMPLE_K)):
-            c_out = ch // (2 ** (i + 1))
-            self.ups.append(weight_norm(nn.ConvTranspose1d(c, c_out, k, u, padding=(k - u) // 2)))
-            stride = int(math.prod(UPSAMPLE[i + 1:]))
-            if stride > 1:
-                self.noise_convs.append(nn.Conv1d(1, c_out, stride * 2, stride=stride, padding=(stride + 1) // 2))
-            else:
-                self.noise_convs.append(nn.Conv1d(1, c_out, 1))
-            self.res.append(nn.ModuleList([ResBlock(c_out, rk) for rk in resblock_k]))
-            c = c_out
-        self.post = weight_norm(nn.Conv1d(c, 1, 7, padding=3))
-        self.ups.apply(init_weights)
-        self.post.apply(init_weights)
-
-    def forward(self, units, f0):
-        """units [B, T, C], f0 [B, T] -> audio [B, T * HOP]."""
-        T = units.shape[1]
-        x = self.unit_proj(units) + self.f0_emb(f0_to_coarse(f0))
-        x = x.transpose(1, 2)
-        for conv, norm in zip(self.enc, self.enc_norm):
-            x = x + F.gelu(norm(conv(x)))
-        x = self.pre(x)
-
-        f0_up = F.interpolate(f0[:, None], scale_factor=float(HOP), mode="nearest")[:, 0]
-        exc = self.source(f0_up)                        # [B, 1, T*HOP]
-
-        for up, nc, rbs in zip(self.ups, self.noise_convs, self.res):
-            x = up(F.leaky_relu(x, 0.1))
-            e = nc(exc)
-            n = min(x.shape[-1], e.shape[-1])
-            x = x[..., :n] + e[..., :n]
-            x = sum(rb(x) for rb in rbs) / len(rbs)
-        x = torch.tanh(self.post(F.leaky_relu(x)))
-        x = x[:, 0, : T * HOP]
-        if x.shape[-1] < T * HOP:
-            x = F.pad(x, (0, T * HOP - x.shape[-1]))
-        return x
-
-    def remove_weight_norm(self):
-        remove_weight_norm(self.pre)
-        remove_weight_norm(self.post)
-        for u in self.ups:
-            remove_weight_norm(u)
-        for rbs in self.res:
-            for rb in rbs:
-                rb.remove_wn()
+def download_base(models_dir: str, progress=None) -> dict:
+    """Downloads the official RVC v2 48 kHz pretrained base (MIT) into Models/base/."""
+    import urllib.request
+    files, _ = base_paths(models_dir)
+    os.makedirs(os.path.dirname(next(iter(files.values()))), exist_ok=True)
+    for i, (name, path) in enumerate(files.items()):
+        if os.path.exists(path) and os.path.getsize(path) > 1_000_000:
+            continue
+        tmp = path + ".part"
+        with urllib.request.urlopen(BASE_URLS[name], timeout=60) as r, open(tmp, "wb") as f:
+            total = int(r.headers.get("Content-Length", 0)) or 1
+            done = 0
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if progress:
+                    progress((i + done / total) / len(files), f"Downloading {name} ({done >> 20} MB)")
+        os.replace(tmp, path)
+    # sanity check: loadable and shaped like RVC v2 48k
+    g = torch.load(files["f0G48k.pth"], map_location="cpu", weights_only=False)
+    sd = g["model"] if "model" in g else g
+    assert sd["enc_p.emb_phone.weight"].shape[1] == 768, "not an RVC v2 (768-dim) base model"
+    return files
 
 
-#--------------------------------------------------------------------------- discriminators
-class PeriodD(nn.Module):
-    def __init__(self, period):
-        super().__init__()
-        self.p = period
-        chs = [1, 32, 128, 512, 1024]
-        self.convs = nn.ModuleList([weight_norm(nn.Conv2d(chs[i], chs[i + 1], (5, 1), (3, 1), padding=(2, 0))) for i in range(4)])
-        self.convs.append(weight_norm(nn.Conv2d(1024, 1024, (5, 1), 1, padding=(2, 0))))
-        self.out = weight_norm(nn.Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
+def load_base(G, D, models_dir: str, explicit: str = "", log=print) -> str:
+    """Initialise from (1) an explicit checkpoint, (2) a VoxForge-trained base, (3) the official RVC v2 base."""
+    files, own = base_paths(models_dir)
 
-    def forward(self, x):
-        fmap = []
-        b, c, t = x.shape
-        if t % self.p:
-            x = F.pad(x, (0, self.p - t % self.p), "reflect")
-            t = x.shape[-1]
-        x = x.view(b, c, t // self.p, self.p)
-        for l in self.convs:
-            x = F.leaky_relu(l(x), 0.1)
-            fmap.append(x)
-        x = self.out(x)
-        fmap.append(x)
-        return torch.flatten(x, 1, -1), fmap
+    def sd_of(path):
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        return ck
 
-
-class ScaleD(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.convs = nn.ModuleList([
-            weight_norm(nn.Conv1d(1, 16, 15, 1, padding=7)),
-            weight_norm(nn.Conv1d(16, 64, 41, 4, groups=4, padding=20)),
-            weight_norm(nn.Conv1d(64, 256, 41, 4, groups=16, padding=20)),
-            weight_norm(nn.Conv1d(256, 1024, 41, 4, groups=64, padding=20)),
-            weight_norm(nn.Conv1d(1024, 1024, 41, 4, groups=256, padding=20)),
-            weight_norm(nn.Conv1d(1024, 1024, 5, 1, padding=2)),
-        ])
-        self.out = weight_norm(nn.Conv1d(1024, 1, 3, 1, padding=1))
-
-    def forward(self, x):
-        fmap = []
-        for l in self.convs:
-            x = F.leaky_relu(l(x), 0.1)
-            fmap.append(x)
-        x = self.out(x)
-        fmap.append(x)
-        return torch.flatten(x, 1, -1), fmap
+    if explicit:
+        ck = sd_of(explicit)
+        if "G" in ck:
+            G.load_state_dict(ck["G"]); D.load_state_dict(ck["D"])
+        else:
+            G.load_state_dict(ck.get("model", ck))
+        return explicit
+    if os.path.exists(own):
+        ck = sd_of(own)
+        G.load_state_dict(ck["G"]); D.load_state_dict(ck["D"])
+        return own
+    if os.path.exists(files["f0G48k.pth"]):
+        G.load_state_dict(sd_of(files["f0G48k.pth"])["model"])          # strict: architecture must match exactly
+        if os.path.exists(files["f0D48k.pth"]):
+            D.load_state_dict(sd_of(files["f0D48k.pth"])["model"])
+        return files["f0G48k.pth"]
+    return ""
 
 
-class Discriminator(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.ds = nn.ModuleList([ScaleD()] + [PeriodD(p) for p in (2, 3, 5, 7, 11)])
-
-    def forward(self, y, y_hat):
-        rs, gs, frs, fgs = [], [], [], []
-        for d in self.ds:
-            r, fr = d(y)
-            g, fg = d(y_hat)
-            rs.append(r); gs.append(g); frs.append(fr); fgs.append(fg)
-        return rs, gs, frs, fgs
+#----------------------------------------------------------------------------- spectra & losses
+_windows: dict = {}
+_mel_fb: dict = {}
 
 
-#--------------------------------------------------------------------------- losses
+def spectrogram(y: torch.Tensor) -> torch.Tensor:
+    """[B, N] -> magnitude [B, 1025, N / 480] (RVC/VITS convention: reflect pad, center=False)."""
+    key = (y.device, y.dtype)
+    if key not in _windows:
+        _windows[key] = torch.hann_window(N_FFT, device=y.device, dtype=y.dtype)
+    pad = (N_FFT - HOP) // 2
+    y = F.pad(y[:, None], (pad, pad), mode="reflect")[:, 0]
+    s = torch.stft(y, N_FFT, hop_length=HOP, win_length=N_FFT, window=_windows[key],
+                   center=False, return_complex=True)
+    return torch.sqrt(s.real ** 2 + s.imag ** 2 + 1e-6)
+
+
+def spec_to_mel(spec: torch.Tensor) -> torch.Tensor:
+    import torchaudio.functional as AF
+    key = (spec.device, spec.dtype)
+    if key not in _mel_fb:
+        fb = AF.melscale_fbanks(N_FFT // 2 + 1, 0.0, SR / 2, N_MELS, SR, norm="slaney", mel_scale="slaney")
+        _mel_fb[key] = fb.T.to(spec.device, spec.dtype)          # [128, 1025]
+    return torch.log(torch.clamp(torch.matmul(_mel_fb[key], spec), min=1e-5))
+
+
+def kl_loss(z_p, logs_q, m_p, logs_p, z_mask):
+    kl = logs_p - logs_q - 0.5 + 0.5 * ((z_p - m_p) ** 2) * torch.exp(-2.0 * logs_p)
+    return torch.sum(kl * z_mask) / torch.sum(z_mask)
+
+
 def feature_loss(fmap_r, fmap_g):
     loss = 0
     for dr, dg in zip(fmap_r, fmap_g):
-        for r, g in zip(dr, dg):
-            loss = loss + torch.mean(torch.abs(r.detach() - g))
+        for rl, gl in zip(dr, dg):
+            loss = loss + torch.mean(torch.abs(rl.float().detach() - gl.float()))
     return loss * 2
 
 
 def discriminator_loss(real, fake):
     loss = 0
-    for r, g in zip(real, fake):
-        loss = loss + torch.mean((1 - r) ** 2) + torch.mean(g ** 2)
+    for dr, dg in zip(real, fake):
+        loss = loss + torch.mean((1 - dr.float()) ** 2) + torch.mean(dg.float() ** 2)
     return loss
 
 
 def generator_loss(fake):
-    return sum(torch.mean((1 - g) ** 2) for g in fake)
+    return sum(torch.mean((1 - dg.float()) ** 2) for dg in fake)
 
 
-class MelLoss(nn.Module):
-    def __init__(self):
+#----------------------------------------------------------------------------- ONNX export wrapper
+def onnx_export(*args, **kwargs):
+    """torch.onnx.export with the TorchScript exporter (torch >= 2.9 defaults to dynamo)."""
+    try:
+        return torch.onnx.export(*args, dynamo=False, **kwargs)
+    except TypeError:                     # older torch: no 'dynamo' argument
+        return torch.onnx.export(*args, **kwargs)
+
+
+class VoiceOnnx(nn.Module):
+    """Adapts RVC's inference graph to the plug-in contract (50 fps in, 960 samples per frame out)."""
+
+    def __init__(self, net):
         super().__init__()
-        import torchaudio
-        self.mels = nn.ModuleList([
-            torchaudio.transforms.MelSpectrogram(SR, n_fft=n, win_length=n, hop_length=n // 4, n_mels=m,
-                                                 f_min=40, f_max=SR // 2, power=1.0, center=True)
-            for n, m in ((512, 64), (1024, 100), (2048, 128))])
+        self.net = net          # rvc.models_onnx.SynthesizerTrnMsNSFsidM
 
-    def forward(self, y, y_hat):
-        loss = 0
-        for mel in self.mels:
-            loss = loss + F.l1_loss(torch.log(mel(y_hat) + 1e-5), torch.log(mel(y) + 1e-5))
-        return loss / len(self.mels)
+    def forward(self, units, f0):
+        u = F.interpolate(units.transpose(1, 2), scale_factor=2.0, mode="nearest").transpose(1, 2)   # [1, 2T, 768]
+        f = F.interpolate(f0[:, None], scale_factor=2.0, mode="nearest")[:, 0]                       # [1, 2T]
+        lengths = torch.ones_like(f).sum(dim=1).long()                                                # dynamic length
+        pitch = f0_to_coarse(f)
+        sid = torch.zeros_like(lengths)
+        rnd = torch.randn_like(u[:, :, :192].transpose(1, 2)) * 0.66666
+        o = self.net(u, lengths, pitch, f, sid, rnd)                                                  # [1, 1, 2T*480]
+        return o[:, 0, :]
+
+
+def export_voice_onnx(G_state: dict, path: str, opset: int = 17):
+    from .rvc.models_onnx import SynthesizerTrnMsNSFsidM
+    net = SynthesizerTrnMsNSFsidM(**MODEL_ARGS, version="v2", is_half=False)
+    net.load_state_dict(G_state, strict=False)
+    net.eval()
+    net.remove_weight_norm()
+    model = VoiceOnnx(net).eval()
+    units = torch.randn(1, 50, 768)
+    f0 = torch.full((1, 50), 220.0)
+    tmp = path + ".tmp"
+    with torch.no_grad():
+        onnx_export(model, (units, f0), tmp, input_names=["units", "f0"], output_names=["audio"],
+                    dynamic_axes={"units": {1: "frames"}, "f0": {1: "frames"}, "audio": {1: "samples"}},
+                    opset_version=opset, do_constant_folding=True)
+    os.replace(tmp, path)
+    return path

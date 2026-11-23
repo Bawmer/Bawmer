@@ -14,12 +14,13 @@ mkdir -p "$DATA" "$MODELS"
 python3 -m venv "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip wheel
 if [[ "${1:-}" == "--cpu" ]]; then
-  "$VENV/bin/python" -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+  "$VENV/bin/python" -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 else
-  "$VENV/bin/python" -m pip install torch torchaudio
+  "$VENV/bin/python" -m pip install torch==2.5.1 torchaudio==2.5.1
 fi
 "$VENV/bin/python" -m pip install "$SRC"
 "$VENV/bin/voxforge-engine" export-content-encoder --models-dir "$MODELS"
+"$VENV/bin/voxforge-engine" download-base --models-dir "$MODELS"
 [[ -f "$DATA/cmudict.dict" ]] || curl -fsSL -o "$DATA/cmudict.dict" \
   https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict || true
 "$VENV/bin/voxforge-engine" check --models-dir "$MODELS"

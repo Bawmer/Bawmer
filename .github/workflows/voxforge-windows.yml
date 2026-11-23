@@ -11,7 +11,37 @@ on:
   workflow_dispatch:
 
 jobs:
+  engine:
+    name: Neural engine (base model fine-tune smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install engine (CPU PyTorch)
+        run: |
+          pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install ./VoxForge/engine
+      - name: Synthetic training material
+        run: python VoxForge/engine/tests/make_synthetic_singing.py data
+      - name: Download the pretrained RVC v2 48 kHz base model
+        run: voxforge-engine download-base --models-dir models
+      - name: Fine-tune from the base model (short) and export voice.onnx
+        run: voxforge-engine train --voice-dir work --models-dir models --samples data/take0.wav data/take1.wav data/take2.wav --epochs 2 --quality fast --max-steps-per-epoch 3 --no-download
+      - name: Run the exported models with onnxruntime
+        run: python VoxForge/engine/tests/check_onnx.py models/content_encoder.onnx work/voice.onnx data/take0.wav converted.wav
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voxforge-test-models
+          path: |
+            models/content_encoder.onnx
+            work/voice.onnx
+            converted.wav
+          retention-days: 7
+
   build:
+    needs: engine
     runs-on: windows-2022
     env:
       ORT_VERSION: "1.20.1"
@@ -35,8 +65,20 @@ jobs:
       - name: Build (Release)
         run: cmake --build build --config Release --parallel
 
-      - name: Engine tests
-        run: build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
+      - name: Get the trained test models
+        uses: actions/download-artifact@v4
+        with:
+          name: voxforge-test-models
+          path: test-models
+
+      - name: Engine tests (incl. neural voice through the C++ ONNX backend)
+        shell: pwsh
+        run: |
+          $env:VF_CONTENT_ENCODER = (Resolve-Path test-models\models\content_encoder.onnx).Path
+          $env:VF_VOICE_MODEL = (Resolve-Path test-models\work\voice.onnx).Path
+          Copy-Item "$env:ORT_ROOT\runtimes\win-x64\native\*.dll" build\VoxForgeTests_artefacts\Release\
+          & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
+          exit $LASTEXITCODE
 
       - name: Host smoke test (loads the .vst3 like a DAW)
         shell: pwsh

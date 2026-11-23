@@ -6,6 +6,7 @@ Usage (normally launched by the plug-in):
                           [--quality fast|standard|high] [--gpu] [--base base.pt]
     voxforge-engine train --pretrain --data-dir CORPUS --voice-dir WORKDIR --models-dir DIR --epochs N --gpu
     voxforge-engine transcribe --audio vocal.wav [--language en|auto] [--model small] [--gpu] [--models-dir DIR]
+    voxforge-engine download-base --models-dir DIR          (pretrained RVC v2 48 kHz base, ~220 MB)
     voxforge-engine export-content-encoder --models-dir DIR
 """
 from __future__ import annotations
@@ -36,11 +37,13 @@ def _check(args) -> dict:
         cuda = torch.cuda.is_available()
         info["cuda_device"] = torch.cuda.get_device_name(0) if cuda else None
     enc = os.path.join(args.models_dir, "content_encoder.onnx") if args.models_dir else ""
-    base = os.path.join(args.models_dir, "base", "base.pt") if args.models_dir else ""
+    base_dir = os.path.join(args.models_dir, "base") if args.models_dir else ""
+    has_base = bool(base_dir) and (os.path.exists(os.path.join(base_dir, "base.pt"))
+                                   or os.path.exists(os.path.join(base_dir, "f0G48k.pth")))
     summary = (f"VoxForge Engine {__version__}, Python {platform.python_version()}, "
                f"GPU: {info.get('cuda_device') or 'none'}, "
                f"content encoder: {'yes' if enc and os.path.exists(enc) else 'no'}, "
-               f"base model: {'yes' if base and os.path.exists(base) else 'no'}"
+               f"base model: {'yes' if has_base else 'no (downloaded on first training)'}"
                + (f", missing: {', '.join(missing)}" if missing else ""))
     return {"summary": summary, "modules": info, "cuda": cuda, "missing": missing}
 
@@ -64,6 +67,11 @@ def main(argv=None) -> int:
     t.add_argument("--base", default="")
     t.add_argument("--gpu", action="store_true")
     t.add_argument("--pretrain", action="store_true", help="train a base model on a multi-singer corpus")
+    t.add_argument("--no-download", action="store_true", help="do not download the pretrained base automatically")
+    t.add_argument("--max-steps-per-epoch", type=int, default=0, help=argparse.SUPPRESS)
+
+    b = sub.add_parser("download-base")
+    b.add_argument("--models-dir", required=True)
 
     r = sub.add_parser("transcribe")
     r.add_argument("--audio", required=True)
@@ -85,6 +93,10 @@ def main(argv=None) -> int:
         elif args.cmd == "transcribe":
             from .transcribe import transcribe
             P.result(**transcribe(args))
+        elif args.cmd == "download-base":
+            from .model import download_base
+            files = download_base(args.models_dir, lambda p, m: P.progress(p, m))
+            P.result(files=files, summary="RVC v2 48 kHz pretrained base installed")
         elif args.cmd == "export-content-encoder":
             from .content import export_onnx
             P.progress(0.1, "Exporting HuBERT content encoder", force=True)

@@ -12,6 +12,7 @@
 #include "../Source/Engine/VoiceAnalyzer.h"
 #include "../Source/Engine/VoicePreset.h"
 #include "../Source/Engine/StemAnalyzer.h"
+#include "../Source/Engine/NeuralBackend.h"
 
 using namespace vf;
 
@@ -192,6 +193,42 @@ int main (int argc, char** argv)
         CHECK (rp.notes[0].lyricChangedFromSource(), "typing a new word marks the note for re-synthesis");
         CHECK (std::abs (rp.beatsToSeconds (rp.notes[0].startBeat) - prj.beatsToSeconds (prj.notes[0].startBeat)) < 0.12,
                "detected timing maps back onto the beat grid");
+    }
+
+    // [9] Neural voice through the C++ ONNX backend (only when models are provided, e.g. in CI)
+    const auto encPath = juce::SystemStats::getEnvironmentVariable ("VF_CONTENT_ENCODER", {});
+    const auto voicePath = juce::SystemStats::getEnvironmentVariable ("VF_VOICE_MODEL", {});
+    if (encPath.isNotEmpty() && voicePath.isNotEmpty())
+    {
+        std::cout << "[9] Neural voice (ONNX Runtime in the plug-in engine)\n";
+        CHECK (NeuralBackend::isCompiledIn(), "neural backend compiled in");
+        NeuralBackend nb;
+        juce::String err;
+        CHECK (nb.loadContentEncoder (juce::File (encPath), err), "content encoder loads " + err);
+        CHECK (nb.loadVoice (juce::File (voicePath), err), "voice.onnx loads " + err);
+        auto g16 = resampleMono (audio, kEngineSampleRate, NeuralBackend::kContentRate);
+        std::vector<float> units; int frames = 0, dim = 0;
+        const bool okUnits = nb.extractUnits (g16.getReadPointer (0), g16.getNumSamples(), units, frames, dim);
+        CHECK (okUnits && dim == 768 && frames > 100, "content units " + juce::String (frames) + " x " + juce::String (dim));
+        std::vector<float> f0 ((size_t) frames, 0.0f);
+        for (int i = 0; i < frames; ++i)
+        {
+            const int k = juce::jlimit (0, curves.numFrames() - 1, (int) ((i + 0.5) / NeuralBackend::kFrameRate * curves.rate));
+            if (curves.amp[(size_t) k] > 0.01f) f0[(size_t) i] = curves.f0Hz[(size_t) k];
+        }
+        std::vector<float> neural;
+        const auto t1 = juce::Time::getMillisecondCounterHiRes();
+        const bool okSyn = nb.synthesise (units, frames, dim, f0, neural);
+        const auto synMs = juce::Time::getMillisecondCounterHiRes() - t1;
+        double e = 0.0; bool fin = true;
+        for (auto v : neural) { e += (double) v * v; fin &= std::isfinite (v); }
+        const double rms = neural.empty() ? 0.0 : std::sqrt (e / (double) neural.size());
+        std::cout << "  synthesised " << neural.size() / 48000.0 << " s in " << synMs << " ms, rms " << rms << "\n";
+        CHECK (okSyn && (int) neural.size() == frames * NeuralBackend::kHop, "neural output length matches frames x 960");
+        CHECK (fin && rms > 1.0e-4, "neural output is finite and not silent");
+        juce::AudioBuffer<float> nbuf (1, (int) neural.size());
+        if (! neural.empty()) nbuf.copyFrom (0, 0, neural.data(), (int) neural.size());
+        writeWav (out.getChildFile ("twinkle_neural.wav"), nbuf, NeuralBackend::kOutputRate);
     }
 
     std::cout << "\n" << (failures == 0 ? "ALL TESTS PASSED" : juce::String (failures) + " FAILURE(S)") << "\n";

@@ -63,17 +63,18 @@ def split_on_silence(x: np.ndarray, sr: int, top_db: float = 40.0, min_len: floa
     return segments
 
 
-def extract_f0(x16k: np.ndarray, n_frames: int) -> np.ndarray:
-    """f0 in Hz at 50 frames/s (0 = unvoiced). Uses WORLD (pyworld) when available."""
+def extract_f0(x16k: np.ndarray, n_frames: int, frames_per_second: int = 50) -> np.ndarray:
+    """f0 in Hz at the given frame rate (0 = unvoiced). Uses WORLD (pyworld) when available."""
+    hop = CONTENT_SR // frames_per_second
     try:
         import pyworld as pw
         x = x16k.astype(np.float64)
-        f0, t = pw.harvest(x, CONTENT_SR, f0_floor=F0_MIN, f0_ceil=F0_MAX, frame_period=1000.0 * FRAME_HOP_16K / CONTENT_SR)
+        f0, t = pw.harvest(x, CONTENT_SR, f0_floor=F0_MIN, f0_ceil=F0_MAX, frame_period=1000.0 * hop / CONTENT_SR)
         f0 = pw.stonemask(x, f0, t, CONTENT_SR)
     except ImportError:
         import librosa
         f0, _, _ = librosa.pyin(x16k, fmin=F0_MIN, fmax=F0_MAX, sr=CONTENT_SR,
-                                frame_length=1024, hop_length=FRAME_HOP_16K)
+                                frame_length=1024, hop_length=hop)
         f0 = np.nan_to_num(f0)
     f0 = np.asarray(f0, dtype=np.float32)
     if len(f0) < n_frames:

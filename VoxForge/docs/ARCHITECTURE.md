@@ -77,21 +77,20 @@ alignment is needed.
 
 | Model | Inputs | Output |
 |---|---|---|
-| `content_encoder.onnx` (shared) | `audio` `[1, N]` float32 @ 16 kHz | `units` `[1, T, 768]`: HuBERT-Base layer 9, 50 frames/s |
+| `content_encoder.onnx` (shared) | `audio` `[1, N]` float32 @ 16 kHz | `units` `[1, T, 768]`: HuBERT-Base layer 12, 50 frames/s |
 | `voice.onnx` (per voice) | `units` `[1, T, 768]`, `f0` `[1, T]` (Hz, 0 = unvoiced) | `audio` `[1, T·960]` @ 48 kHz |
 
-`voice.onnx` is an NSF-HiFiGAN-style generator:
+`voice.onnx` is **RVC v2 48 kHz** (`SynthesizerTrnMs768NSFsid`, model code vendored from rvc-python,
+MIT) wrapped to the plug-in contract: units are repeated ×2 to 100 frames/s, f0 is quantised to RVC's
+256 mel-pitch bins, speaker 0 is used, and the prior is sampled with σ = 0.667. The graph is: text/content
+encoder (6-layer relative-attention transformer over units + pitch embedding) → normalising flow (reverse)
+→ NSF-HiFiGAN decoder (×12 ×10 ×2 ×2, sine excitation from f0) → 48 kHz audio.
 
-- unit projection plus an embedding of the coarse (mel-scale) f0
-- a dilated convolution encoder
-- a ×8 ×6 ×4 ×5 transposed-convolution upsampler with multi-receptive-field residual blocks
-- a harmonic sine excitation (8 harmonics, anti-aliased) plus noise, added at every resolution
-
-Training uses multi-period and multi-scale discriminators, multi-resolution mel L1 (×45),
-feature matching and LSGAN losses, AdamW, and AMP on CUDA. Pitch augmentation of ±2 semitones
-makes the model generalise to new melodies. Phrases are cut at silences and cached with their
-HuBERT units, WORLD f0 and 48 kHz audio. Training fine-tunes from `Models/base/base.pt` when it
-exists, and resumes from `checkpoints/latest.pt`.
+Training fine-tunes the official pretrained RVC v2 48 kHz base (`f0G48k.pth` / `f0D48k.pth`, downloaded
+automatically) with the VITS objective: multi-period discriminator V2, mel L1 ×45, KL, feature matching,
+LSGAN; AdamW 1e-4, lr decay 0.999875/epoch, 0.36 s slices from 0.96 s crops, ±2 st pitch augmentation.
+Phrases are cut at silences and cached with HuBERT layer-12 units (50 fps), WORLD f0 (100 fps) and
+48 kHz audio. Training resumes from `checkpoints/latest.pt`.
 
 ### Rendering with a neural voice
 

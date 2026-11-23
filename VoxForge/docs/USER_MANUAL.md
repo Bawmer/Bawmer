@@ -58,7 +58,7 @@ Folders VoxForge uses (`%APPDATA%\VoxForge`):
 | Folder / file | Contents |
 |---|---|
 | `Voices\<name>\` | One folder per cloned voice: `voice.json`, `samples\`, `voice.onnx` (neural) |
-| `Models\` | `content_encoder.onnx`, optional `base\base.pt`, Whisper models |
+| `Models\` | `content_encoder.onnx`, `base\f0G48k.pth` + `f0D48k.pth` (pretrained base), optional `base\base.pt`, Whisper models |
 | `Cache\` | Rendered takes (the 12 most recent are kept) |
 | `cmudict.dict` | Optional English pronunciation dictionary |
 | `settings.xml` | Engine command, language, GPU switch |
@@ -79,11 +79,13 @@ Folders VoxForge uses (`%APPDATA%\VoxForge`):
 Every clone starts as a Lite voice. You can upgrade it to Neural at any time with
 the same samples. The header badge shows **NEURAL** or **DSP ENGINE** for the active voice.
 
-> **About neural quality:** training from scratch on 10–30 minutes of singing gives
-> a usable but rough voice. For studio quality, fine-tune from a **base model**
-> (`Models\base\base.pt`) that was pre-trained on many singers. See
+> **Base model:** neural training does not start from zero. It fine-tunes the pretrained
+> **RVC v2 48 kHz** base model (MIT license, trained on about 50 hours of many different voices).
+> The engine installer downloads it to `Models\base\` (~220 MB); if it is missing, the first
+> training downloads it. Because the base already knows how to produce a natural voice, 10–30
+> minutes of your singing are enough. A singing-specialised base you train yourself
+> (`Models\base\base.pt`) takes priority — see
 > [BUILD.md → Base model](BUILD.md#base-model-for-high-quality-neural-voices).
-> When the file is present, VoxForge uses it automatically.
 
 ---
 

@@ -50,9 +50,10 @@ GitHub Actions workflow.
 
 - The DSP engine, Lite cloning, Vocal-to-MIDI, the editor and DAW integration are complete. They
   are covered by automated tests: engine tests, plus a host test that loads the `.vst3`.
-- The neural pipeline (training script, ONNX export, ONNX Runtime inference in the plug-in) is
-  complete. For natural, studio-grade clones it needs a **base model** pre-trained on a
-  multi-singer corpus. VoxForge does not ship one, because of dataset licensing. Without it,
-  training starts from scratch and needs much more data and time. See
-  [BUILD.md → Base model](docs/BUILD.md#base-model-for-high-quality-neural-voices).
+- **Base model:** neural voices are fine-tuned from the official pretrained **RVC v2 48 kHz** base
+  model (MIT license, trained by the RVC project on about 50 h of the multi-speaker VCTK corpus).
+  The engine downloads it automatically (~220 MB) and uses the exact RVC v2 architecture, so a few
+  minutes of your singing are enough for a natural clone. You can swap in any RVC v2 48 kHz
+  compatible base, including a singing-specialised one you pre-train yourself
+  ([BUILD.md → Base model](docs/BUILD.md#base-model-for-high-quality-neural-voices)).
 - Use only your own voice, or voices you have permission to clone.

@@ -1,9 +1,8 @@
 """Speaker-independent phonetic content features ("units").
 
-We use layer 9 of HuBERT-Base (torchaudio bundle, MIT/Apache weights from
-fairseq), 768-dim at 50 frames/s on 16 kHz audio. Layer 9 keeps phonetic
-information while discarding most of the speaker identity, which is what makes
-the voice-conversion model sing the *content* of the guide in *your* timbre.
+We use the output of transformer layer 12 of HuBERT-Base (torchaudio bundle of
+fairseq's hubert_base_ls960), 768-dim at 50 frames/s on 16 kHz audio - exactly the
+features RVC v2 was trained on, so the pretrained RVC v2 base model can be used.
 """
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ import os
 
 import numpy as np
 
-LAYER = 9
+LAYER = 12
 UNIT_DIM = 768
 
 
@@ -51,8 +50,9 @@ def export_onnx(path: str, device: str = "cpu", opset: int = 17) -> str:
     dummy = torch.zeros(1, 16000 * 3, device=device)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = path + ".tmp"
-    torch.onnx.export(model, (dummy,), tmp, input_names=["audio"], output_names=["units"],
-                      dynamic_axes={"audio": {1: "samples"}, "units": {1: "frames"}},
-                      opset_version=opset, do_constant_folding=True)
+    from .model import onnx_export
+    onnx_export(model, (dummy,), tmp, input_names=["audio"], output_names=["units"],
+                dynamic_axes={"audio": {1: "samples"}, "units": {1: "frames"}},
+                opset_version=opset, do_constant_folding=True)
     os.replace(tmp, path)
     return path

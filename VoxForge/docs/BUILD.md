@@ -124,19 +124,33 @@ Every command prints JSON lines (`progress`, `log`, `result` or `error`). See `p
 
 ### Base model for high-quality neural voices
 
-Fine-tuning from a model pre-trained on many singers gives far better clones from 10–30
-minutes of your voice than training from scratch.
+VoxForge's neural voice is the **RVC v2 48 kHz** architecture (`SynthesizerTrnMs768NSFsid`:
+HuBERT layer-12 content + f0 → VITS-style flow → NSF-HiFiGAN at 48 kHz). The model code is vendored
+from rvc-python (MIT) in `engine/voxforge_engine/rvc/` (see its `NOTICE.md`).
 
-1. Collect a multi-singer corpus of dry singing. Check each dataset's licence for your
-   intended use. Typical choices are OpenSinger, M4Singer, Opencpop, NUS-48E and VocalSet,
-   plus your own recordings. Aim for 20 h or more.
-2. Train the base model. This takes days on one GPU and is resumable:
-   ```powershell
-   voxforge-engine train --pretrain --data-dir D:\corpus --voice-dir D:\base-work `
-                         --models-dir "$env:APPDATA\VoxForge\Models" --epochs 1000 --quality high --gpu
-   ```
-3. The result is written to `Models\base\base.pt`. Every later voice training starts from it
-   automatically.
+**Default base (automatic):** the official RVC v2 pretrained weights `f0G48k.pth` / `f0D48k.pth`
+(MIT, ~220 MB, trained by the RVC project on ~50 h of the VCTK corpus, 110 speakers), downloaded by
+
+```powershell
+voxforge-engine download-base --models-dir "$env:APPDATA\VoxForge\Models"
+```
+
+(`install_engine.ps1` does this; training also downloads it on first use). Every voice training then
+fine-tunes these weights with your samples.
+
+**Other bases:** priority is `train --base <file>` > `Models\base\base.pt` > `Models\base\f0G48k.pth`.
+Any RVC v2 48 kHz (768-dim) generator checkpoint works with `--base`. To build a **singing-specialised**
+base, fine-tune on a multi-singer corpus (check each dataset's licence, e.g. OpenSinger, M4Singer,
+Opencpop, NUS-48E, VocalSet) — it starts from the RVC base and writes `Models\base\base.pt`:
+
+```powershell
+voxforge-engine train --pretrain --data-dir D:\corpus --voice-dir D:\base-work `
+                      --models-dir "$env:APPDATA\VoxForge\Models" --epochs 200 --quality high --gpu
+```
+
+**CI check:** the `engine` job of the GitHub workflow downloads the real base model, fine-tunes it
+briefly on synthetic audio, exports `voice.onnx`, runs it with onnxruntime, and the Windows job then
+renders a phrase through the plug-in's C++ ONNX backend with those files.
 
 ## 3. Linux / macOS development build and tests
 
