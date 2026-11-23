@@ -15,7 +15,7 @@ PresetsTab::PresetsTab (VoxForgeProcessor& p) : proc (p)
     details.setFont (juce::Font (juce::FontOptions (14.0f)));
     addAndMakeVisible (details);
 
-    for (auto* b : { &useBtn, &useExprBtn, &renameBtn, &dupBtn, &deleteBtn, &exportBtn, &importBtn, &saveExprBtn,
+    for (auto* b : { &useBtn, &useExprBtn, &renameBtn, &dupBtn, &deleteBtn, &exportBtn, &importBtn, &importRvcBtn, &saveExprBtn,
                      &openFolderBtn, &browseEngineBtn, &testEngineBtn, &dictBtn })
         addAndMakeVisible (*b);
     useBtn.setColour (juce::TextButton::buttonColourId, Colours::accent);
@@ -87,6 +87,20 @@ PresetsTab::PresetsTab (VoxForgeProcessor& p) : proc (p)
             auto r = proc.presets().importVoice (f);
             proc.lastMessage = r.wasOk() ? "Imported " + f.getFileNameWithoutExtension() : "Import failed: " + r.getErrorMessage();
             refreshList();
+        });
+    };
+    importRvcBtn.setTooltip ("Use a voice trained in Applio or RVC WebUI (RVC v2 .pth, 32/40/48 kHz, HiFi-GAN). "
+                             "Needs the VoxForge Engine for the one-time conversion.");
+    importRvcBtn.onClick = [this]
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import Applio / RVC voice model", juce::File(), "*.pth");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                              [this] (const juce::FileChooser& fc)
+        {
+            auto f = fc.getResult();
+            if (! f.existsAsFile()) return;
+            askName ("Name for the imported voice", f.getFileNameWithoutExtension(),
+                     [this, f] (juce::String n) { importRvcModel (f, n); });
         });
     };
     saveExprBtn.onClick = [this]
@@ -199,6 +213,7 @@ void PresetsTab::resized()
     auto lc = listSection.content();
     auto lb = lc.removeFromBottom (36);
     importBtn.setBounds (lb.removeFromLeft (150).reduced (2));
+    importRvcBtn.setBounds (lb.removeFromLeft (220).reduced (2));
     list.setBounds (lc.reduced (0, 4));
 
     detailSection.setBounds (r);
@@ -309,6 +324,50 @@ void PresetsTab::updateDetails()
     }
     else t << "\n" << v->notes;
     details.setText (t, juce::dontSendNotification);
+}
+
+void PresetsTab::importRvcModel (const juce::File& pth, const juce::String& name)
+{
+    if (! EngineClient::isInstalled())
+    {
+        proc.lastMessage = EngineClient::describeInstallation();
+        return;
+    }
+    statusLabel.setText ("Importing " + pth.getFileName() + " ...", juce::dontSendNotification);
+    auto folder = proc.presets().createVoiceFolder (name);
+    juce::Thread::launch ([sp = juce::Component::SafePointer<PresetsTab> (this), pth, name, folder]
+    {
+        auto o = EngineClient::run ({ "import-model", "--model", pth.getFullPathName(),
+                                      "--out", folder.getChildFile ("voice.onnx").getFullPathName() }, nullptr, nullptr);
+        juce::MessageManager::callAsync ([sp, o, name, folder, pth]
+        {
+            if (sp == nullptr) return;
+            if (! o.ok)
+            {
+                folder.deleteRecursively();
+                sp->statusLabel.setText ("Import failed: " + o.error, juce::dontSendNotification);
+                sp->proc.lastMessage = "Import failed: " + o.error;
+                return;
+            }
+            VoiceModel v;
+            v.name = name;
+            v.folder = folder;
+            v.engine = "neural";
+            v.neuralModel = "voice.onnx";
+            v.neuralSampleRate = o.result.getProperty ("sampleRate", 48000.0);
+            v.neuralHop = o.result.getProperty ("hop", 960);
+            v.notes = "Imported from Applio / RVC: " + pth.getFileName()
+                      + " (" + juce::String ((int) v.neuralSampleRate / 1000) + " kHz)";
+            const auto warn = o.result.getProperty ("warning", "").toString();
+            if (warn.isNotEmpty()) v.notes << "\n" << warn;
+            sp->proc.presets().saveVoice (v);
+            sp->proc.voicesChanged();
+            sp->proc.selectVoice (v.id, false);
+            sp->refreshList();
+            sp->statusLabel.setText ("Imported '" + name + "' as a neural voice." + (warn.isNotEmpty() ? "  " + warn : juce::String()),
+                                     juce::dontSendNotification);
+        });
+    });
 }
 
 void PresetsTab::askName (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> done)

@@ -205,7 +205,10 @@ int main (int argc, char** argv)
         NeuralBackend nb;
         juce::String err;
         CHECK (nb.loadContentEncoder (juce::File (encPath), err), "content encoder loads " + err);
-        CHECK (nb.loadVoice (juce::File (voicePath), err), "voice.onnx loads " + err);
+        const double voiceRate = juce::SystemStats::getEnvironmentVariable ("VF_VOICE_RATE", "48000").getDoubleValue();
+        const int voiceHop = juce::SystemStats::getEnvironmentVariable ("VF_VOICE_HOP", "960").getIntValue();
+        CHECK (nb.loadVoice (juce::File (voicePath), err, voiceRate, voiceHop),
+               "voice loads (" + juce::String (voiceRate / 1000.0, 0) + " kHz, hop " + juce::String (voiceHop) + ") " + err);
         auto g16 = resampleMono (audio, kEngineSampleRate, NeuralBackend::kContentRate);
         std::vector<float> units; int frames = 0, dim = 0;
         const bool okUnits = nb.extractUnits (g16.getReadPointer (0), g16.getNumSamples(), units, frames, dim);
@@ -223,12 +226,12 @@ int main (int argc, char** argv)
         double e = 0.0; bool fin = true;
         for (auto v : neural) { e += (double) v * v; fin &= std::isfinite (v); }
         const double rms = neural.empty() ? 0.0 : std::sqrt (e / (double) neural.size());
-        std::cout << "  synthesised " << neural.size() / 48000.0 << " s in " << synMs << " ms, rms " << rms << "\n";
-        CHECK (okSyn && (int) neural.size() == frames * NeuralBackend::kHop, "neural output length matches frames x 960");
+        std::cout << "  synthesised " << neural.size() / voiceRate << " s in " << synMs << " ms, rms " << rms << "\n";
+        CHECK (okSyn && (int) neural.size() == frames * voiceHop, "neural output length matches frames x hop");
         CHECK (fin && rms > 1.0e-4, "neural output is finite and not silent");
         juce::AudioBuffer<float> nbuf (1, (int) neural.size());
         if (! neural.empty()) nbuf.copyFrom (0, 0, neural.data(), (int) neural.size());
-        writeWav (out.getChildFile ("twinkle_neural.wav"), nbuf, NeuralBackend::kOutputRate);
+        writeWav (out.getChildFile ("twinkle_neural_" + juce::String ((int) voiceRate) + ".wav"), nbuf, voiceRate);
     }
 
     // [10] Lyrics extraction through the plug-in's StemAnalyzer + engine process

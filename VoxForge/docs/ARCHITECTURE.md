@@ -92,6 +92,12 @@ LSGAN; AdamW 1e-4, lr decay 0.999875/epoch, 0.36 s slices from 0.96 s crops, ±2
 Phrases are cut at silences and cached with HuBERT layer-12 units (50 fps), WORLD f0 (100 fps) and
 48 kHz audio. Training resumes from `checkpoints/latest.pt`.
 
+**Applio / RVC models.** `import-model` reads an Applio or RVC WebUI inference `.pth` (`weight` and
+`config`, loaded tensors-only). It accepts RVC v2 with f0 and the HiFi-GAN vocoder at 32/40/48 kHz,
+rebuilds the generator from the stored config, and exports it through the same wrapper. The preset
+stores the model's sample rate and hop (`sr / 50` samples per 50 fps frame). The plug-in synthesises
+at that rate and resamples the result to 48 kHz.
+
 ### Rendering with a neural voice
 
 - **From MIDI.** The DSP engine renders a neutral guide vocal that carries the timing and

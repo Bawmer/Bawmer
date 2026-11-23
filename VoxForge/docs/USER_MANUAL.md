@@ -119,6 +119,23 @@ the same samples. The header badge shows **NEURAL** or **DSP ENGINE** for the ac
 
 Tick *Start neural training right after cloning* to do steps 3 and 4 in one go.
 
+### Use a voice trained in Applio (or RVC WebUI)
+
+VoxForge's neural voices use the RVC v2 architecture, the same one [Applio](https://github.com/IAHispano/Applio)
+uses for its standard voice models. You can train a voice in Applio's app, with its large choice of
+community base models, and sing it in VoxForge:
+
+1. In Applio, train with **RVC v2**, **pitch guidance on**, the **HiFi-GAN** vocoder and the
+   **contentvec** embedder (Applio's defaults). Any sample rate works: 32, 40 or 48 kHz.
+2. Take the small inference model Applio exports (`logs/<name>/<name>.pth`, typically 50–60 MB).
+   Don't use the large `G_*.pth` training checkpoints.
+3. In VoxForge, go to **Presets → Import Applio / RVC model…**, pick the `.pth` file and name the voice.
+   The engine converts it once to `voice.onnx`, and the voice appears as a **NEURAL** preset.
+
+Not supported: RVC v1 models, models without pitch guidance, and Applio's RefineGAN/MRF vocoders.
+VoxForge tells you which one applies. The `.index` file (feature retrieval) isn't used. Only import
+voices you have the right to use.
+
 ---
 
 ## 4. Workflow B: sing from MIDI and lyrics

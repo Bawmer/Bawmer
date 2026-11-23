@@ -27,15 +27,18 @@ public:
     juce::String status() const;
 
     bool loadContentEncoder (const juce::File& onnx, juce::String& error);
-    bool loadVoice (const juce::File& onnx, juce::String& error);
+    /** @param sampleRate / hop  output format of the voice (RVC v2: 48000/960, 40000/800, 32000/640) */
+    bool loadVoice (const juce::File& onnx, juce::String& error, double sampleRate = kOutputRate, int hop = kHop);
+    double outputRate() const noexcept { return voiceRate; }
+    int outputHop() const noexcept { return voiceHop; }
     bool hasContentEncoder() const noexcept;
     bool hasVoice() const noexcept;
     juce::File currentVoiceFile() const { return voiceFile; }
 
     static constexpr double kContentRate = 16000.0;
     static constexpr double kFrameRate = 50.0;       // content frames per second
-    static constexpr double kOutputRate = 48000.0;
-    static constexpr int kHop = 960;                  // output samples per frame
+    static constexpr double kOutputRate = 48000.0;   // default (VoxForge-trained voices)
+    static constexpr int kHop = 960;                  // default output samples per frame
 
     /** Extracts content units from 16 kHz audio. Returns frames x dim (row-major). */
     bool extractUnits (const float* audio16k, int numSamples, std::vector<float>& units, int& frames, int& dim,
@@ -50,6 +53,8 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl;
     juce::File voiceFile;
+    double voiceRate = kOutputRate;
+    int voiceHop = kHop;
     juce::String lastError;
     juce::CriticalSection lock;
 };

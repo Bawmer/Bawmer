@@ -235,7 +235,7 @@ def train(args) -> dict:
     return {"model": "voice.onnx", "sampleRate": M.SR, "hop": 960, "contentEncoder": enc_path}
 
 
-def _verify_onnx(path: str):
+def _verify_onnx(path: str, hop: int = 960):
     try:
         import onnxruntime as ort
     except ImportError:
@@ -244,6 +244,6 @@ def _verify_onnx(path: str):
     s = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
     y = s.run(None, {"units": np.random.randn(1, 30, 768).astype(np.float32),
                      "f0": np.full((1, 30), 220.0, np.float32)})[0]
-    assert y.shape == (1, 30 * 960), y.shape
+    assert y.shape == (1, 30 * hop), y.shape
     assert np.isfinite(y).all()
     P.log("voice.onnx verified with onnxruntime")

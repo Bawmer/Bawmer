@@ -128,9 +128,11 @@ bool NeuralBackend::loadContentEncoder (const juce::File& f, juce::String& error
     return true;
 }
 
-bool NeuralBackend::loadVoice (const juce::File& f, juce::String& error)
+bool NeuralBackend::loadVoice (const juce::File& f, juce::String& error, double sampleRate, int hop)
 {
     const juce::ScopedLock sl (lock);
+    voiceRate = sampleRate > 0 ? sampleRate : kOutputRate;
+    voiceHop = hop > 0 ? hop : kHop;
     if (f == voiceFile && impl->voice != nullptr) return true;
     if (! f.existsAsFile()) { error = "Voice model not found: " + f.getFullPathName(); lastError = error; return false; }
     if (! impl->init (error)) { lastError = error; return false; }
@@ -209,7 +211,7 @@ bool NeuralBackend::synthesise (const std::vector<float>& units, int frames, int
 {
     const juce::ScopedLock sl (lock);
     if (impl->voice == nullptr || frames <= 0) return false;
-    audioOut.assign ((size_t) frames * kHop, 0.0f);
+    audioOut.assign ((size_t) frames * voiceHop, 0.0f);
 
     constexpr int chunk = 400, ctx = 24, fade = 8;      // 8 s chunks, 0.48 s context, 160 ms crossfade
     auto mem = Ort::MemoryInfo::CreateCpu (OrtArenaAllocator, OrtMemTypeDefault);
@@ -243,13 +245,13 @@ bool NeuralBackend::synthesise (const std::vector<float>& units, int frames, int
             // write [s - fade, s + chunk) with a linear crossfade at the start
             const int w0 = juce::jmax (0, s - (s > 0 ? fade : 0));
             const int w1 = juce::jmin (frames, s + chunk);
-            for (int smp = w0 * kHop; smp < w1 * kHop; ++smp)
+            for (int smp = w0 * voiceHop; smp < w1 * voiceHop; ++smp)
             {
-                const size_t local = (size_t) (smp - a * kHop);
+                const size_t local = (size_t) (smp - a * voiceHop);
                 if (local >= ylen) break;
                 float g = 1.0f;
-                if (s > 0 && smp < s * kHop)
-                    g = (float) (smp - w0 * kHop) / (float) (fade * kHop);
+                if (s > 0 && smp < s * voiceHop)
+                    g = (float) (smp - w0 * voiceHop) / (float) (fade * voiceHop);
                 audioOut[(size_t) smp] = audioOut[(size_t) smp] * (1.0f - g) + y[local] * g;
             }
         }
@@ -271,7 +273,7 @@ NeuralBackend::~NeuralBackend() = default;
 bool NeuralBackend::isCompiledIn() noexcept { return false; }
 juce::String NeuralBackend::status() const { return "neural engine not compiled in (DSP engine active)"; }
 bool NeuralBackend::loadContentEncoder (const juce::File&, juce::String& e) { e = status(); return false; }
-bool NeuralBackend::loadVoice (const juce::File&, juce::String& e) { e = status(); return false; }
+bool NeuralBackend::loadVoice (const juce::File&, juce::String& e, double, int) { e = status(); return false; }
 bool NeuralBackend::hasContentEncoder() const noexcept { return false; }
 bool NeuralBackend::hasVoice() const noexcept { return false; }
 bool NeuralBackend::extractUnits (const float*, int, std::vector<float>&, int&, int&, std::atomic<bool>*) { return false; }

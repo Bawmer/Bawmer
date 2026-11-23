@@ -31,6 +31,12 @@ jobs:
         run: voxforge-engine train --voice-dir work --models-dir models --samples data/take0.wav data/take1.wav data/take2.wav --epochs 2 --quality fast --max-steps-per-epoch 3 --no-download
       - name: Run the exported models with onnxruntime
         run: python VoxForge/engine/tests/check_onnx.py models/content_encoder.onnx work/voice.onnx data/take0.wav converted.wav
+      - name: Import Applio / RVC v2 models (48 kHz trained + 40 kHz)
+        run: |
+          python VoxForge/engine/tests/make_applio_models.py work/checkpoints/latest.pt .
+          voxforge-engine import-model --model applio48k.pth --out imported/applio48k.onnx
+          voxforge-engine import-model --model applio40k.pth --out imported/applio40k.onnx
+          ls -la imported
       - name: Lyrics extraction - recording with known words (espeak-ng) through the engine
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng
@@ -56,6 +62,7 @@ jobs:
           path: |
             models/content_encoder.onnx
             work/voice.onnx
+            imported/applio40k.onnx
             converted.wav
             lyrics.wav
             transcribe.jsonl
@@ -105,7 +112,14 @@ jobs:
           } else { Write-Warning "No trained test models (engine job failed) - neural test [9] skipped" }
           Copy-Item "$env:ORT_ROOT\runtimes\win-x64\native\*.dll" build\VoxForgeTests_artefacts\Release\
           & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
-          exit $LASTEXITCODE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path test-models\imported\applio40k.onnx) {
+            Write-Host "--- imported Applio/RVC 40 kHz model through the plug-in backend ---"
+            $env:VF_VOICE_MODEL = (Resolve-Path test-models\imported\applio40k.onnx).Path
+            $env:VF_VOICE_RATE = "40000"; $env:VF_VOICE_HOP = "800"
+            & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output-40k
+            exit $LASTEXITCODE
+          }
 
       - name: Host smoke test (loads the .vst3 like a DAW)
         shell: pwsh

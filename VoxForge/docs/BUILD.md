@@ -118,6 +118,7 @@ voxforge-engine train --voice-dir DIR --models-dir DIR [--samples ...] [--epochs
 voxforge-engine train --pretrain --data-dir CORPUS --voice-dir WORK --models-dir DIR --epochs N --gpu
 voxforge-engine transcribe --audio vocal.wav [--language auto|en|...] [--model small|medium|large-v3] [--gpu]
 voxforge-engine export-content-encoder --models-dir DIR
+voxforge-engine import-model --model my_applio_voice.pth --out DIR/voice.onnx
 ```
 
 Every command prints JSON lines (`progress`, `log`, `result` or `error`). See `protocol.py`.

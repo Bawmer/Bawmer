@@ -6,6 +6,7 @@ Usage (normally launched by the plug-in):
                           [--quality fast|standard|high] [--gpu] [--base base.pt]
     voxforge-engine train --pretrain --data-dir CORPUS --voice-dir WORKDIR --models-dir DIR --epochs N --gpu
     voxforge-engine transcribe --audio vocal.wav [--language en|auto] [--model small] [--prompt "lyrics hint"] [--gpu]
+    voxforge-engine import-model --model my_voice.pth --out DIR/voice.onnx   (Applio / RVC v2 voice)
     voxforge-engine download-base --models-dir DIR          (pretrained RVC v2 48 kHz base, ~220 MB)
     voxforge-engine export-content-encoder --models-dir DIR
 """
@@ -77,6 +78,10 @@ def main(argv=None) -> int:
     t.add_argument("--no-download", action="store_true", help="do not download the pretrained base automatically")
     t.add_argument("--max-steps-per-epoch", type=int, default=0, help=argparse.SUPPRESS)
 
+    im = sub.add_parser("import-model", help="convert an Applio / RVC v2 voice model (.pth) to voice.onnx")
+    im.add_argument("--model", required=True)
+    im.add_argument("--out", required=True, help="output voice.onnx path")
+
     b = sub.add_parser("download-base")
     b.add_argument("--models-dir", required=True)
 
@@ -101,6 +106,14 @@ def main(argv=None) -> int:
         elif args.cmd == "transcribe":
             from .transcribe import transcribe
             P.result(**transcribe(args))
+        elif args.cmd == "import-model":
+            from .model import import_rvc_model
+            P.progress(0.1, "Reading model", force=True)
+            info = import_rvc_model(args.model, args.out)
+            from .train import _verify_onnx
+            _verify_onnx(args.out, hop=info["hop"])
+            P.progress(1.0, "Imported", force=True)
+            P.result(model=os.path.basename(args.out), **info)
         elif args.cmd == "download-base":
             from .model import download_base
             files = download_base(args.models_dir, lambda p, m: P.progress(p, m))

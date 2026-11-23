@@ -21,6 +21,8 @@ It works in Cubase, Nuendo, FL Studio, Ableton Live, Studio One and Reaper at 44
   extraction** (Whisper) turn it into editable notes and words. Change the melody or the words,
   then re-render in your cloned voice. Unchanged words keep the original articulation; new
   words are synthesised. A/B monitoring against the original and WAV export are included.
+- **Applio / RVC voices**: import any RVC v2 voice model trained in Applio or RVC WebUI (32/40/48 kHz)
+  and sing it from MIDI or use it for vocal replacement.
 - **Preset manager**: use, rename, duplicate, delete, import and export voices as `.vfvoice`
   files, and save expression settings into a preset.
 - A real-time **live MIDI voice** for auditioning, and offline high-quality renders for playback

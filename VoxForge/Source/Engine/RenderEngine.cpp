@@ -75,12 +75,21 @@ bool RenderEngine::prepareNeural (const VoiceModel& v)
         setStatus ("Neural engine unavailable: " + err, prog);
         return false;
     }
-    if (! backend.loadVoice (v.neuralModelFile(), err))
+    if (! backend.loadVoice (v.neuralModelFile(), err, v.neuralSampleRate, v.neuralHop))
     {
         setStatus ("Voice model failed to load: " + err, prog);
         return false;
     }
     return true;
+}
+
+/** Neural voices may run at 32/40/48 kHz; takes are kept at the engine rate. */
+static juce::AudioBuffer<float> toEngineRate (const std::vector<float>& audio, double rate)
+{
+    juce::AudioBuffer<float> b (1, juce::jmax (1, (int) audio.size()));
+    b.clear();
+    if (! audio.empty()) b.copyFrom (0, 0, audio.data(), (int) audio.size());
+    return std::abs (rate - kEngineSampleRate) < 1.0 ? b : resampleMono (b, rate, kEngineSampleRate);
 }
 
 static juce::File cacheFileFor (const juce::String& hash) { return Paths::cacheDir().getChildFile (hash + ".wav"); }
@@ -216,8 +225,7 @@ std::shared_ptr<RenderedTake> RenderEngine::renderSynth (const RenderRequest& r)
             if (backend.synthesise (units, frames, dim, f0, audio, &cancelFlag,
                                     [this] (float p) { prog = 0.45f + 0.5f * p; }))
             {
-                take->engineAudio.setSize (1, (int) audio.size());
-                take->engineAudio.copyFrom (0, 0, audio.data(), (int) audio.size());
+                take->engineAudio = toEngineRate (audio, backend.outputRate());
                 const float pk = take->engineAudio.getMagnitude (0, 0, take->engineAudio.getNumSamples());
                 if (pk > 0.98f) take->engineAudio.applyGain (0.95f / pk);
                 take->neural = true;
@@ -457,7 +465,7 @@ std::shared_ptr<RenderedTake> RenderEngine::renderReplace (const RenderRequest& 
 
     // ---- volume follow (source regions keep the original dynamics) ----------------------
     {
-        const int hop = NeuralBackend::kHop;
+        const int hop = backend.outputHop();
         float prevG = 1.0f;
         for (int i = 0; i < frames; ++i)
         {
@@ -481,8 +489,7 @@ std::shared_ptr<RenderedTake> RenderEngine::renderReplace (const RenderRequest& 
     }
 
     auto take = std::make_shared<RenderedTake>();
-    take->engineAudio.setSize (1, (int) audio.size());
-    take->engineAudio.copyFrom (0, 0, audio.data(), (int) audio.size());
+    take->engineAudio = toEngineRate (audio, backend.outputRate());
     const float pk = take->engineAudio.getMagnitude (0, 0, take->engineAudio.getNumSamples());
     if (pk > 0.98f) take->engineAudio.applyGain (0.95f / pk);
     take->neural = true;

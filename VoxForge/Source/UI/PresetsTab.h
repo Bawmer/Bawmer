@@ -25,6 +25,7 @@ private:
     void updateDetails();
     juce::String selectedId() const;
     void askName (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> done);
+    void importRvcModel (const juce::File& pth, const juce::String& name);
 
     VoxForgeProcessor& proc;
     Section listSection { "Voice presets" }, detailSection { "Details" }, settingsSection { "Settings" };
@@ -32,7 +33,7 @@ private:
     juce::Label details;
     juce::TextButton useBtn { "Use voice" }, useExprBtn { "Use voice + its expression" }, renameBtn { "Rename" },
                      dupBtn { "Duplicate" }, deleteBtn { "Delete" }, exportBtn { "Export .vfvoice" },
-                     importBtn { "Import .vfvoice" }, saveExprBtn { "Save current expression into preset" },
+                     importBtn { "Import .vfvoice" }, importRvcBtn { "Import Applio / RVC model..." }, saveExprBtn { "Save current expression into preset" },
                      openFolderBtn { "Open data folder" }, browseEngineBtn { "Browse..." }, testEngineBtn { "Test engine" },
                      dictBtn { "Load CMU dictionary..." };
     juce::Label engineLabel, langLabel, statusLabel;

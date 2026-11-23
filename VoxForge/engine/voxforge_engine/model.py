@@ -201,10 +201,16 @@ class VoiceOnnx(nn.Module):
         return o[:, 0, :]
 
 
-def export_voice_onnx(G_state: dict, path: str, opset: int = 17):
+def export_voice_onnx(G_state: dict, path: str, opset: int = 17, config: dict | None = None) -> str:
+    """Exports an RVC v2 generator (any of 32/40/48 kHz) to the plug-in contract
+    units [1,T,768] + f0 [1,T] @ 50 fps -> audio [1, T * sr / 50]."""
     from .rvc.models_onnx import SynthesizerTrnMsNSFsidM
-    net = SynthesizerTrnMsNSFsidM(**MODEL_ARGS, version="v2", is_half=False)
-    net.load_state_dict(G_state, strict=False)
+    cfg = dict(MODEL_ARGS if config is None else config)
+    net = SynthesizerTrnMsNSFsidM(**cfg, version="v2", is_half=False)
+    missing, unexpected = net.load_state_dict(G_state, strict=False)
+    real_missing = [k for k in missing if not k.startswith("enc_q.")]      # posterior encoder: training only
+    if real_missing:
+        raise RuntimeError(f"model weights do not match the RVC v2 architecture (missing {real_missing[:5]} ...)")
     net.eval()
     net.remove_weight_norm()
     model = VoiceOnnx(net).eval()
@@ -217,3 +223,52 @@ def export_voice_onnx(G_state: dict, path: str, opset: int = 17):
                     opset_version=opset, do_constant_folding=True)
     os.replace(tmp, path)
     return path
+
+
+#----------------------------------------------------------------------------- Applio / RVC model import
+_CONFIG_KEYS = ["spec_channels", "segment_size", "inter_channels", "hidden_channels", "filter_channels", "n_heads",
+                "n_layers", "kernel_size", "p_dropout", "resblock", "resblock_kernel_sizes", "resblock_dilation_sizes",
+                "upsample_rates", "upsample_initial_channel", "upsample_kernel_sizes", "spk_embed_dim",
+                "gin_channels", "sr"]
+_SR_NAMES = {"32k": 32000, "40k": 40000, "48k": 48000}
+
+
+def read_rvc_model(path: str) -> tuple[dict, dict, dict]:
+    """Reads an inference .pth saved by Applio or RVC WebUI -> (weights, model config, info).
+
+    Supported: RVC v2 (768-dim content), f0 models, HiFi-GAN vocoder, 32/40/48 kHz.
+    Loaded tensors-only (weights_only=True): no code in the file is executed."""
+    ck = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(ck, dict) or "weight" not in ck or "config" not in ck:
+        raise RuntimeError("Not an Applio/RVC voice model (expected the small inference .pth with 'weight' and "
+                           "'config' - not a G_*.pth training checkpoint).")
+    weights = ck["weight"]
+    version = str(ck.get("version", "v1"))
+    if version != "v2" or weights["enc_p.emb_phone.weight"].shape[1] != 768:
+        raise RuntimeError("Only RVC v2 models (768-dim content features) are supported; this is a v1 model. "
+                           "Retrain it as v2 in Applio.")
+    if int(ck.get("f0", 1)) != 1:
+        raise RuntimeError("This model was trained without pitch guidance (f0 = 0); singing needs a pitch model.")
+    vocoder = str(ck.get("vocoder", "HiFi-GAN"))
+    if vocoder not in ("HiFi-GAN", "hifigan", ""):
+        raise RuntimeError(f"Vocoder '{vocoder}' is not supported yet; train/export the model with HiFi-GAN in Applio.")
+    cfg = dict(zip(_CONFIG_KEYS, list(ck["config"])))
+    cfg["spk_embed_dim"] = int(weights["emb_g.weight"].shape[0])            # as RVC does at load time
+    sr = cfg.get("sr", ck.get("sr"))
+    sr = _SR_NAMES.get(sr, sr) if isinstance(sr, str) else int(sr)
+    if sr not in (32000, 40000, 48000):
+        raise RuntimeError(f"Unsupported model sample rate {sr}")
+    cfg["sr"] = sr
+    info = {"sampleRate": sr, "hop": sr // 50, "version": version, "vocoder": vocoder or "HiFi-GAN",
+            "embedder": str(ck.get("embedder_model", "contentvec")),
+            "epochs": ck.get("epoch", ck.get("info", "")), "source": os.path.basename(path)}
+    return weights, cfg, info
+
+
+def import_rvc_model(path: str, out_onnx: str) -> dict:
+    weights, cfg, info = read_rvc_model(path)
+    export_voice_onnx(weights, out_onnx, config=cfg)
+    if info["embedder"] not in ("contentvec", "hubert_base", "hubert-base", ""):
+        info["warning"] = (f"Model was trained with the '{info['embedder']}' embedder; VoxForge uses ContentVec/"
+                           "HuBERT-base features, so pronunciation may be less accurate.")
+    return info
