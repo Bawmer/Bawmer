@@ -134,13 +134,13 @@ void RenderEngine::run()
             take->hostAudio = resampleMono (take->engineAudio, kEngineSampleRate, req->hostRate);
             writeWav (cacheFileFor (req->hash), take->engineAudio, kEngineSampleRate, 24);
 
-            // keep the cache folder bounded (~40 takes)
+            // keep the cache folder bounded (12 most recent takes)
             auto files = Paths::cacheDir().findChildFiles (juce::File::findFiles, false, "*.wav");
-            if (files.size() > 40)
+            if (files.size() > 12)
             {
                 std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
                            { return a.getLastModificationTime() < b.getLastModificationTime(); });
-                for (int i = 0; i < files.size() - 40; ++i) files.getReference (i).deleteFile();
+                for (int i = 0; i < files.size() - 12; ++i) files.getReference (i).deleteFile();
             }
 
             {

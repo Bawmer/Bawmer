@@ -471,7 +471,7 @@ void LiveVoice::render (juce::AudioBuffer<float>& buffer, int start, int num, fl
 {
     {
         const juce::SpinLock::ScopedTryLockType sl (sylLock);
-        if (sl.isLocked() && syllablesDirty) { syllables = pendingSyllables; syllablesDirty = false; sylIndex = 0; }
+        if (sl.isLocked() && syllablesDirty) { std::swap (syllables, pendingSyllables); syllablesDirty = false; sylIndex = 0; }   // swap: no allocation on the audio thread
     }
     {
         const juce::SpinLock::ScopedTryLockType sl (timbreLock);

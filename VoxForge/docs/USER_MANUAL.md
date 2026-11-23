@@ -59,7 +59,7 @@ Folders VoxForge uses (`%APPDATA%\VoxForge`):
 |---|---|
 | `Voices\<name>\` | One folder per cloned voice: `voice.json`, `samples\`, `voice.onnx` (neural) |
 | `Models\` | `content_encoder.onnx`, optional `base\base.pt`, Whisper models |
-| `Cache\` | Rendered takes (deleted automatically, about 40 kept) |
+| `Cache\` | Rendered takes (the 12 most recent are kept) |
 | `cmudict.dict` | Optional English pronunciation dictionary |
 | `settings.xml` | Engine command, language, GPU switch |
 

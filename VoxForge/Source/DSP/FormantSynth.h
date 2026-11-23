@@ -46,7 +46,13 @@ class VoiceDSP
 public:
     void prepare (double sampleRate);
     void reset();
-    void setTimbre (const VoiceTimbre& t) { timbre = t; }
+    /** Copies only the scalar timbre fields (the DSP never needs correctionDb), so
+        this is allocation-free and safe on the audio thread. */
+    void setTimbre (const VoiceTimbre& t)
+    {
+        timbre.formantScale = t.formantScale; timbre.jitter = t.jitter; timbre.shimmer = t.shimmer;
+        timbre.breathBase = t.breathBase; timbre.brightness = t.brightness;
+    }
     void setTargets (const VoiceTargets& t, bool snap = false);
     /** Renders n samples (overwrites out). Targets are smoothed internally. */
     void process (float* out, int n);

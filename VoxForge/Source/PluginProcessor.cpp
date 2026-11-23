@@ -35,7 +35,8 @@ VoxForgeProcessor::VoxForgeProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Params", createLayout())
 {
-    Lexicon::get().loadDictionary (Paths::cmuDict());
+    if (! Lexicon::get().hasUserDictionary())       // shared by all instances: parse once per process
+        Lexicon::get().loadDictionary (Paths::cmuDict());
 
     // a short demo phrase so the plug-in makes sound out of the box
     const int demo[] = { 60, 62, 64, 65, 67, 67 };
@@ -267,9 +268,14 @@ void VoxForgeProcessor::timerCallback()
         dirtySince = juce::Time::getMillisecondCounter();
     }
 
+    if (! renderEngine.isBusy())
     {
-        const juce::SpinLock::ScopedLockType sl (takeLock);
-        if (graveyard.size() > 0 && ! renderEngine.isBusy()) graveyard.clear();
+        std::vector<std::shared_ptr<RenderedTake>> dead;
+        {
+            const juce::SpinLock::ScopedLockType sl (takeLock);
+            dead.swap (graveyard);          // O(1) under the lock ...
+        }
+        dead.clear();                       // ... buffers are freed outside it
     }
 
     if (trainJob != nullptr && trainJob->isFinished())
