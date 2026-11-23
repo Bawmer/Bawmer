@@ -28,6 +28,10 @@ struct RenderRequest
     bool replaceMode = false;
     double hostRate = 48000.0;
     juce::String hash;
+
+    // Voicebox pronunciation guide (neural voices, MIDI rendering)
+    bool voiceboxGuide = false;
+    juce::String voiceboxUrl, voiceboxProfile, voiceboxLanguage;
 };
 
 /** Background offline renderer ("Render" button). Highest quality, not real-time. */
@@ -59,6 +63,7 @@ private:
     std::shared_ptr<RenderedTake> renderReplace (const RenderRequest& r);
     bool prepareNeural (const VoiceModel& v);
     void setStatus (const juce::String& s, float p);
+    juce::String applyVoiceboxGuide (const RenderRequest& r, std::vector<float>& units, int frames, int dim);
     std::vector<float> framesF0FromCurves (const ControlCurves& c, const Timeline& tl, int frames) const;
 
     NeuralBackend backend;

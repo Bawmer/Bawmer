@@ -3,6 +3,8 @@
 #include "../DSP/AudioUtils.h"
 #include "../DSP/Spectral.h"
 #include "../Core/Phonemes.h"
+#include "Voicebox.h"
+#include "GuideAlign.h"
 
 namespace vf
 {
@@ -219,6 +221,8 @@ std::shared_ptr<RenderedTake> RenderEngine::renderSynth (const RenderRequest& r)
         std::vector<float> units; int frames = 0, dim = 0;
         if (backend.extractUnits (g16.getReadPointer (0), g16.getNumSamples(), units, frames, dim, &cancelFlag))
         {
+            const auto guideNote = r.voiceboxGuide ? applyVoiceboxGuide (r, units, frames, dim) : juce::String();
+            if (cancelFlag) return nullptr;
             auto f0 = framesF0FromCurves (curves, tl, frames);
             setStatus ("Neural voice: rendering " + r.voice.name, 0.45f);
             std::vector<float> audio;
@@ -229,7 +233,8 @@ std::shared_ptr<RenderedTake> RenderEngine::renderSynth (const RenderRequest& r)
                 const float pk = take->engineAudio.getMagnitude (0, 0, take->engineAudio.getNumSamples());
                 if (pk > 0.98f) take->engineAudio.applyGain (0.95f / pk);
                 take->neural = true;
-                take->summary = "neural voice '" + r.voice.name + "', " + juce::String (r.project.notes.size()) + " notes";
+                take->summary = "neural voice '" + r.voice.name + "', " + juce::String (r.project.notes.size()) + " notes"
+                                + (guideNote.isNotEmpty() ? ", " + guideNote : juce::String());
                 return take;
             }
         }
@@ -242,6 +247,105 @@ std::shared_ptr<RenderedTake> RenderEngine::renderSynth (const RenderRequest& r)
     take->engineAudio = std::move (guide);
     take->summary = "DSP voice '" + r.voice.name + "', " + juce::String (r.project.notes.size()) + " notes";
     return take;
+}
+
+//==============================================================================
+namespace
+{
+    struct Phrase { int first = 0, last = 0; double t0 = 0.0, t1 = 0.0; };
+
+    /** Runs of notes separated by rests of 0.3 s or more, at most ~12 s each (DTW cost and
+        TTS length stay bounded). Long runs are split at their largest inner gap. */
+    std::vector<Phrase> splitPhrases (const VocalProject& p)
+    {
+        std::vector<Phrase> out;
+        const auto& n = p.notes;
+        if (n.empty()) return out;
+        auto start = [&] (int i) { return p.beatsToSeconds (n[(size_t) i].startBeat); };
+        auto end   = [&] (int i) { return p.beatsToSeconds (n[(size_t) i].endBeat()); };
+
+        std::function<void (int, int)> add = [&] (int a, int b)
+        {
+            if (b > a && end (b) - start (a) > 12.0)
+            {
+                int cut = a; double gap = -1.0e9;
+                for (int i = a; i < b; ++i)
+                    if (start (i + 1) - end (i) > gap) { gap = start (i + 1) - end (i); cut = i; }
+                add (a, cut);
+                add (cut + 1, b);
+                return;
+            }
+            out.push_back ({ a, b, start (a), end (b) });
+        };
+        int a = 0;
+        for (int i = 0; i + 1 < (int) n.size(); ++i)
+            if (start (i + 1) - end (i) >= 0.3) { add (a, i); a = i + 1; }
+        add (a, (int) n.size() - 1);
+
+        // widen each phrase for onset consonants before the first beat and the release after
+        // the last note, without overlapping its neighbours
+        for (size_t k = 0; k < out.size(); ++k)
+        {
+            const double prevEnd = k > 0 ? out[k - 1].t1 : 0.0;
+            const double nextStart = k + 1 < out.size() ? out[k + 1].t0 - 0.25 : 1.0e9;
+            out[k].t0 = juce::jmax (prevEnd, out[k].t0 - 0.25);
+            out[k].t1 = juce::jmin (nextStart, out[k].t1 + 0.2);
+        }
+        return out;
+    }
+}
+
+juce::String RenderEngine::applyVoiceboxGuide (const RenderRequest& r, std::vector<float>& units, int frames, int dim)
+{
+    auto prj = r.project;
+    prj.sortNotes();
+    const auto phrases = splitPhrases (prj);
+    int used = 0, fetched = 0;
+    juce::String problem;
+
+    for (size_t k = 0; k < phrases.size() && ! cancelFlag; ++k)
+    {
+        const auto& ph = phrases[k];
+        juce::StringArray lyrics; juce::Array<bool> starts;
+        for (int i = ph.first; i <= ph.last; ++i) { lyrics.add (prj.notes[(size_t) i].lyric); starts.add (prj.notes[(size_t) i].wordStart); }
+        const auto text = voicebox::phraseText (lyrics, starts);
+        const int f0 = juce::jlimit (0, frames, (int) std::floor (ph.t0 * NeuralBackend::kFrameRate));
+        const int f1 = juce::jlimit (0, frames, (int) std::ceil (ph.t1 * NeuralBackend::kFrameRate));
+        if (text.isEmpty() || f1 - f0 < 5) continue;
+
+        setStatus ("Voicebox: speaking phrase " + juce::String ((int) k + 1) + "/" + juce::String ((int) phrases.size())
+                   + " \"" + text.substring (0, 40) + "\"", 0.33f + 0.1f * (float) k / (float) phrases.size());
+        juce::AudioBuffer<float> speech; double rate = 0.0; juce::String err; bool cached = false;
+        if (! voicebox::speak (r.voiceboxUrl, r.voiceboxProfile, text, r.voiceboxLanguage, speech, rate, err, &cancelFlag, &cached))
+        {
+            if (! cancelFlag) problem = "Voicebox guide unavailable (" + err + ")";
+            break;                                      // do not wait for every phrase on a dead connection
+        }
+        if (! cached) ++fetched;
+
+        auto s16 = resampleMono (speech, rate, NeuralBackend::kContentRate);
+        const auto [a, b] = trimSilence (s16.getReadPointer (0), s16.getNumSamples());
+        if (b - a < (int) (0.2 * NeuralBackend::kContentRate)) continue;
+        std::vector<float> su; int sf = 0, sd = 0;
+        if (! backend.extractUnits (s16.getReadPointer (0) + a, b - a, su, sf, sd, &cancelFlag) || sd != dim || sf < 2)
+            continue;
+
+        float cost = 0.0f;
+        const auto warped = warpUnitsOntoGuide (&units[(size_t) f0 * (size_t) dim], f1 - f0, su.data(), sf, dim, &cost);
+        // cross-fade into the guide over 4 frames at the phrase edges
+        for (int f = f0; f < f1; ++f)
+        {
+            const float w = juce::jlimit (0.0f, 1.0f, (float) (juce::jmin (f - f0, f1 - 1 - f) + 1) / 5.0f);
+            float* u = &units[(size_t) f * (size_t) dim];
+            const float* v = &warped[(size_t) (f - f0) * (size_t) dim];
+            for (int d = 0; d < dim; ++d) u[d] = w * v[d] + (1.0f - w) * u[d];
+        }
+        ++used;
+    }
+    juce::String note = "Voicebox guide " + juce::String (used) + "/" + juce::String ((int) phrases.size()) + " phrases";
+    if (fetched > 0) note << " (" << fetched << " new)";
+    if (problem.isNotEmpty()) note << " - " << problem;
+    return note;
 }
 
 //==============================================================================

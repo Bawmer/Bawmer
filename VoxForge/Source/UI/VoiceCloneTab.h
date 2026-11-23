@@ -31,6 +31,7 @@ private:
     void addFiles (const juce::Array<juce::File>& files);
     void startClone();
     void startTraining();
+    void trainFromVoicebox();
     void appendLog (const juce::String& s);
 
     VoxForgeProcessor& proc;
@@ -38,7 +39,8 @@ private:
             neuralSection { "3. Neural training (optional, best quality)" };
     juce::ListBox list;
     juce::TextButton addBtn { "Add files..." }, removeBtn { "Remove" }, clearBtn { "Clear" },
-                     cloneBtn { "Create Voice Clone" }, trainBtn { "Train Neural Voice" }, cancelBtn { "Cancel" };
+                     cloneBtn { "Create Voice Clone" }, trainBtn { "Train Neural Voice" }, cancelBtn { "Cancel" },
+                     voiceboxBtn { "Train from Voicebox voice..." };
     juce::Label tips, nameLabel, trainTarget, engineLabel, totalLabel;
     juce::TextEditor nameEditor, log;
     juce::ComboBox qualityBox;

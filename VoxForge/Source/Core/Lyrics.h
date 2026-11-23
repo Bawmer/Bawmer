@@ -11,6 +11,7 @@ struct Syllable
     juce::String text;
     juce::StringArray phonemes;
     bool isHold = false;          // "-" : continue previous vowel on a new note (melisma)
+    bool wordStart = false;       // first syllable of a word
 };
 
 /** English grapheme-to-phoneme lexicon.

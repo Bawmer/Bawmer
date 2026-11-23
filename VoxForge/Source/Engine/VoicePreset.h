@@ -30,6 +30,12 @@ public:
     juce::String lyricsModel() const;        // whisper model size: tiny, base, small, medium, large-v3
     bool useGpu() const;
 
+    // Voicebox (local TTS app) as pronunciation guide for neural voices
+    juce::String voiceboxUrl() const;          // default http://127.0.0.1:17493
+    bool useVoiceboxGuide() const;
+    juce::String voiceboxGuideProfile() const; // profile id
+    juce::String voiceboxGuideLanguage() const;
+
 private:
     Settings();
     std::unique_ptr<juce::PropertiesFile> file;

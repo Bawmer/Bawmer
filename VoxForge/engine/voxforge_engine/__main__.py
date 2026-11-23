@@ -7,6 +7,7 @@ Usage (normally launched by the plug-in):
     voxforge-engine train --pretrain --data-dir CORPUS --voice-dir WORKDIR --models-dir DIR --epochs N --gpu
     voxforge-engine transcribe --audio vocal.wav [--language en|auto] [--model small] [--prompt "lyrics hint"] [--gpu]
     voxforge-engine import-model --model my_voice.pth --out DIR/voice.onnx   (Applio / RVC v2 voice)
+    voxforge-engine voicebox-profiles [--url http://127.0.0.1:17493]
     voxforge-engine download-base --models-dir DIR          (pretrained RVC v2 48 kHz base, ~220 MB)
     voxforge-engine export-content-encoder --models-dir DIR
 """
@@ -77,6 +78,14 @@ def main(argv=None) -> int:
     t.add_argument("--pretrain", action="store_true", help="train a base model on a multi-singer corpus")
     t.add_argument("--no-download", action="store_true", help="do not download the pretrained base automatically")
     t.add_argument("--max-steps-per-epoch", type=int, default=0, help=argparse.SUPPRESS)
+    t.add_argument("--voicebox-profile", default="",
+                   help="generate training speech with this Voicebox voice profile (id or name) first")
+    t.add_argument("--voicebox-url", default="http://127.0.0.1:17493")
+    t.add_argument("--voicebox-minutes", type=float, default=10.0)
+    t.add_argument("--voicebox-language", default="", help="default: the profile's language")
+
+    vp = sub.add_parser("voicebox-profiles", help="list the voice profiles of a running Voicebox app")
+    vp.add_argument("--url", default="http://127.0.0.1:17493")
 
     im = sub.add_parser("import-model", help="convert an Applio / RVC v2 voice model (.pth) to voice.onnx")
     im.add_argument("--model", required=True)
@@ -114,6 +123,9 @@ def main(argv=None) -> int:
             _verify_onnx(args.out, hop=info["hop"])
             P.progress(1.0, "Imported", force=True)
             P.result(model=os.path.basename(args.out), **info)
+        elif args.cmd == "voicebox-profiles":
+            from . import voicebox
+            P.result(profiles=voicebox.profiles(args.url), health=voicebox.health(args.url))
         elif args.cmd == "download-base":
             from .model import download_base
             files = download_base(args.models_dir, lambda p, m: P.progress(p, m))

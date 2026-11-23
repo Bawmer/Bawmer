@@ -112,7 +112,11 @@ def train(args) -> dict:
     os.makedirs(voice_dir, exist_ok=True)
     os.makedirs(models_dir, exist_ok=True)
 
-    samples = args.samples or sorted(glob.glob(os.path.join(voice_dir, "samples", "*")))
+    samples = list(args.samples) or sorted(f for f in glob.glob(os.path.join(voice_dir, "samples", "*"))
+                                           if os.path.isfile(f))
+    if getattr(args, "voicebox_profile", ""):
+        from .voicebox import generate_for_training
+        samples += generate_for_training(args, voice_dir)
     if args.data_dir:
         for ext in ("wav", "flac", "aif", "aiff", "ogg", "mp3"):
             samples += glob.glob(os.path.join(args.data_dir, "**", f"*.{ext}"), recursive=True)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LookAndFeel.h"
+#include "../Engine/Voicebox.h"
 
 class VoxForgeProcessor;
 
@@ -26,6 +27,8 @@ private:
     juce::String selectedId() const;
     void askName (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> done);
     void importRvcModel (const juce::File& pth, const juce::String& name);
+    void connectVoicebox();
+    void fillVoiceboxProfiles();
 
     VoxForgeProcessor& proc;
     Section listSection { "Voice presets" }, detailSection { "Details" }, settingsSection { "Settings" };
@@ -40,6 +43,12 @@ private:
     juce::TextEditor engineEditor;
     juce::ComboBox langBox, lyricsModelBox;
     juce::ToggleButton gpuToggle { "Use GPU (CUDA) for training / transcription" };
+    juce::Label voiceboxLabel;
+    juce::TextEditor voiceboxUrlEditor;
+    juce::TextButton voiceboxConnectBtn { "Connect" };
+    juce::ComboBox voiceboxProfileBox;
+    juce::ToggleButton voiceboxGuideToggle { "Natural pronunciation (neural voices)" };
+    std::vector<vf::voicebox::Profile> voiceboxProfiles;
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::AlertWindow> nameWindow;
     int lastCount = -1;

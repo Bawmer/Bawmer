@@ -395,6 +395,9 @@ std::vector<Syllable> lyricsToSyllables (const juce::String& textIn)
     for (auto& token : juce::StringArray::fromTokens (text, " ", ""))
     {
         if (token.isEmpty()) continue;
+        const size_t firstOfToken = out.size();
+        struct MarkWord { std::vector<Syllable>& o; size_t i;
+                          ~MarkWord() { if (i < o.size() && ! o[i].isHold) o[i].wordStart = true; } } markWord { out, firstOfToken };
         if (token.containsOnly ("-"))
         {
             for (int k = 0; k < token.length(); ++k) { Syllable s; s.text = "-"; s.isHold = true; out.push_back (s); }
@@ -451,12 +454,14 @@ void applyLyricsToNotes (std::vector<Note>& notes, const juce::String& text, int
         {
             n.lyric = syls[k].text;
             n.phonemes = syls[k].isHold ? juce::String() : syls[k].phonemes.joinIntoString (" ");
+            n.wordStart = syls[k].wordStart;
             ++k;
         }
         else
         {
             n.lyric = "la";
             n.phonemes = "l aa";
+            n.wordStart = true;
         }
     }
 }

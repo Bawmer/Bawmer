@@ -6,7 +6,11 @@ namespace vf
 //==============================================================================
 juce::File Paths::dataDir()
 {
-    auto d = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("VoxForge");
+    // VOXFORGE_DATA_DIR relocates presets, models and caches (portable installs, tests)
+    const auto custom = juce::SystemStats::getEnvironmentVariable ("VOXFORGE_DATA_DIR", {});
+    auto d = custom.isNotEmpty() && juce::File::isAbsolutePath (custom)
+               ? juce::File (custom)
+               : juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("VoxForge");
     d.createDirectory();
     return d;
 }
@@ -39,6 +43,10 @@ juce::String Settings::engineCommand() const { return file->getValue ("engineCom
 juce::String Settings::language() const      { return file->getValue ("language", "auto"); }
 juce::String Settings::lyricsModel() const   { return file->getValue ("lyricsModel", "small"); }
 bool Settings::useGpu() const                { return file->getBoolValue ("useGpu", true); }
+juce::String Settings::voiceboxUrl() const   { return file->getValue ("voiceboxUrl", "http://127.0.0.1:17493"); }
+bool Settings::useVoiceboxGuide() const      { return file->getBoolValue ("voiceboxGuide", false); }
+juce::String Settings::voiceboxGuideProfile() const  { return file->getValue ("voiceboxGuideProfile"); }
+juce::String Settings::voiceboxGuideLanguage() const { return file->getValue ("voiceboxGuideLanguage", "en"); }
 
 juce::StringArray Settings::resolveEngineCommand() const
 {

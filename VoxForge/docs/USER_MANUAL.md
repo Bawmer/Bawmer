@@ -150,6 +150,28 @@ similar but not identical. An imported voice can therefore sound slightly less c
 little less of its own timbre, than it does in Applio. Voices trained with another embedder (for example
 *spin-v2*) differ more, and VoxForge warns about this in the voice notes and the status line.
 
+### Clone from a few seconds with Voicebox
+
+[Voicebox](https://github.com/jamiepine/voicebox) is a free (MIT) desktop voice studio that clones
+a voice from a few seconds of audio, using Qwen3-TTS and other speech models. It speaks but cannot
+sing. VoxForge can use it to make a neural *singing* voice without 10–30 minutes of recordings:
+
+1. Install and start Voicebox. Create a voice profile in it from a short, clean recording.
+2. In VoxForge, check **Presets → Settings → Voicebox**. The default address is
+   `http://127.0.0.1:17493`; change it only if you run Voicebox on another port.
+3. On the **Voice Cloning** tab, click **Train from Voicebox voice...** and pick the profile. To
+   choose the preset name, type it in the *Voice name* box first.
+
+VoxForge creates the preset and asks Voicebox for about 10 minutes of varied speech in that voice,
+stored in the preset's `samples/voicebox` folder. It then trains the neural voice exactly like
+**Train Neural Voice**, with the same quality and epoch settings. If generation stops halfway, the
+next run reuses the clips it already has. The engine and an NVIDIA GPU are recommended, as for any
+neural training.
+
+The voice learns its timbre from synthetic speech, not from your singing, so expect a voice that
+resembles the profile rather than a perfect copy. Real singing recordings still give the best
+clone. Only clone voices you have the right to use.
+
 ---
 
 ## 4. Workflow B: sing from MIDI and lyrics
@@ -191,6 +213,31 @@ it re-renders about 0.7 s after each edit. **Render** forces a render. During DA
 the rendered vocal plays in sync with the timeline. **Play** and **Stop** preview the render
 inside the plug-in, starting from the selected note. **Export WAV** writes the vocal,
 starting at beat 0, at your project sample rate.
+
+### Natural pronunciation with Voicebox (neural voices)
+
+A neural voice normally re-sings a guide vocal made by VoxForge's built-in formant synthesizer,
+which is why words can sound a little synthetic. If the Voicebox app is running, it can speak the
+lyrics instead:
+
+1. Go to **Presets → Settings → Voicebox**, click **Connect** and choose a voice profile. Any
+   profile in the right language works; the neural voice provides the timbre, and only the
+   profile's pronunciation and timing are used.
+2. Turn on **Natural pronunciation (neural voices)**.
+
+When you render, VoxForge splits the notes into phrases at rests of 0.3 s or more, at most about
+12 s each. Voicebox speaks each phrase, and VoxForge stretches the speech onto your notes by
+matching the sounds of the speech to those of the built-in guide (dynamic time warping on
+HuBERT content features). The melody, vibrato and timing still come from your notes and settings.
+
+- The first render of a phrase waits for Voicebox, which can take a few seconds per phrase. The
+  speech is cached, so later renders and edits that don't change a phrase's words are fast.
+- Syllables typed on separate notes are joined into words for Voicebox: `hap-py` is spoken as
+  "happy". Phrases with explicit `[phonemes]` keep the built-in guide.
+- If Voicebox isn't reachable, VoxForge renders with the built-in guide and says why in the
+  status line.
+- The setting applies to MIDI renders. Vocal replacement already uses the original singer's
+  articulation.
 
 **Live MIDI voice**: while the DAW is stopped, or before anything is rendered, VoxForge also
 sings incoming MIDI in real time, one syllable per note, so you can audition with a keyboard.
@@ -353,6 +400,7 @@ the beat so the vowel lands on it, and final consonants close the note.
 | Lyrics extraction failed | Install faster-whisper (the engine installer does this). The first run downloads the Whisper model, so it needs internet once; after that it works offline. Choose the language in Settings if detection fails. |
 | Training very slow | Use an NVIDIA GPU with *Use GPU* on, or the *Fast* quality level. On CPU only, use Lite clones. |
 | Neural badge missing | The voice needs `voice.onnx`, the build needs the neural backend, and `Models\content_encoder.onnx` must exist. The Presets status lines show which one is missing. |
+| Voicebox guide unavailable / cannot connect | Start the Voicebox app and check the address in *Presets → Settings → Voicebox* (default `http://127.0.0.1:17493`). Click **Connect** to test it. |
 | Wrong pronunciation | Load the CMU dictionary, split syllables with `-`, or type phonemes for that note. |
 | Clicks or artefacts in replacement | Raise *Min note length*, lower *Sensitivity*, merge tiny notes, and use a cleaner (drier) stem. |
 

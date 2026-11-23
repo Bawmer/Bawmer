@@ -13,6 +13,9 @@
 #include "../Source/Engine/VoicePreset.h"
 #include "../Source/Engine/StemAnalyzer.h"
 #include "../Source/Engine/NeuralBackend.h"
+#include "../Source/Engine/RenderEngine.h"
+#include "../Source/Engine/Voicebox.h"
+#include "../Source/Engine/GuideAlign.h"
 
 using namespace vf;
 
@@ -265,6 +268,109 @@ int main (int argc, char** argv)
         for (auto& n : lp.notes) lyricNotes += (n.lyric != juce::String::charToString ((juce::juce_wchar) 0x2022)) ? 1 : 0;
         std::cout << "  " << lp.notes.size() << " notes, " << lyricNotes << " with recognised syllables; lyrics: " << lp.lyricsText << "\n";
         CHECK (lyricNotes > 0 && lp.lyricsText.isNotEmpty(), "recognised words were placed on notes");
+    }
+
+    // [11] Voicebox: pronunciation guide (word text, alignment) and the REST client
+    {
+        std::cout << "[11] Voicebox pronunciation guide\n";
+        auto words = melody ("hap-py birth-day - to you", { 60, 60, 62, 60, 60, 65, 64 });
+        juce::StringArray ly; juce::Array<bool> ws;
+        for (auto& n : words.notes) { ly.add (n.lyric); ws.add (n.wordStart); }
+        const auto text = voicebox::phraseText (ly, ws);
+        CHECK (text == "happy birthday to you", "notes -> spoken text: \"" + text + "\"");
+        ly.set (2, "[b er th]");
+        CHECK (voicebox::phraseText (ly, ws).isEmpty(), "explicit phonemes keep the built-in guide");
+        auto reloaded = words; reloaded.fromValueTree (words.toValueTree());
+        CHECK (! reloaded.notes[1].wordStart && reloaded.notes[2].wordStart, "word starts survive save / load");
+
+        // DTW: guide A x5, B x20, C x5 vs speech A x3, B x4, C x6 (+ noise)
+        const int dim = 16;
+        juce::Random rng (11);
+        auto unitVec = [&]
+        {
+            std::vector<float> v (dim); double s = 0;
+            for (auto& x : v) { x = rng.nextFloat() * 2.0f - 1.0f; s += x * x; }
+            for (auto& x : v) x /= (float) std::sqrt (s);
+            return v;
+        };
+        const auto A = unitVec(), B = unitVec(), C = unitVec();
+        auto seq = [&] (std::initializer_list<std::pair<const std::vector<float>*, int>> parts, float noise)
+        {
+            std::vector<float> o;
+            for (auto& [v, n] : parts) for (int i = 0; i < n; ++i) for (int k = 0; k < dim; ++k) o.push_back ((*v)[(size_t) k] + noise * (rng.nextFloat() - 0.5f));
+            return o;
+        };
+        const auto g = seq ({ { &A, 5 }, { &B, 20 }, { &C, 5 } }, 0.3f);
+        const auto sp = seq ({ { &A, 3 }, { &B, 4 }, { &C, 6 } }, 0.1f);
+        float cost = 0.0f;
+        const auto w = warpUnitsOntoGuide (g.data(), 30, sp.data(), 13, dim, &cost);
+        auto cosAt = [&] (int f, const std::vector<float>& ref)
+        {
+            double d = 0, n = 0;
+            for (int k = 0; k < dim; ++k) { d += w[(size_t) (f * dim + k)] * ref[(size_t) k]; n += w[(size_t) (f * dim + k)] * w[(size_t) (f * dim + k)]; }
+            return d / std::sqrt (n + 1e-12);
+        };
+        bool aligned = true;
+        for (int f = 0; f < 30; ++f) aligned &= cosAt (f, f < 5 ? A : f < 25 ? B : C) > 0.9;
+        CHECK (aligned && (int) w.size() == 30 * dim, "speech units warped onto the sung timing (cost " + juce::String (cost, 3) + ")");
+        std::vector<float> sig (5200, 0.0f);
+        for (int i = 1000; i < 4200; ++i) sig[(size_t) i] = 0.5f * std::sin (0.05f * (float) i);
+        const auto [ta, tb] = trimSilence (sig.data(), (int) sig.size(), -38.0f, 160);
+        CHECK (ta >= 600 && ta <= 1000 && tb >= 4200 && tb <= 4600, "silence trimmed around speech");
+
+        const auto vbUrl = juce::SystemStats::getEnvironmentVariable ("VF_VOICEBOX_URL", {});
+        if (vbUrl.isNotEmpty())
+        {
+            juce::String err;
+            CHECK (voicebox::health (vbUrl, err), "Voicebox /health " + err);
+            std::vector<voicebox::Profile> profiles;
+            CHECK (voicebox::listProfiles (vbUrl, profiles, err) && ! profiles.empty(),
+                   "Voicebox /profiles: " + juce::String ((int) profiles.size()) + " profile(s) " + err);
+            const auto profileId = profiles.empty() ? juce::String() : profiles[0].id;
+            const auto spoken = juce::String ("twinkle twinkle little star how i wonder what you are");
+            juce::AudioBuffer<float> speech; double rate = 0; bool cached = true;
+            const bool okSpeak = voicebox::speak (vbUrl, profileId, spoken, "en", speech, rate, err, nullptr, &cached);
+            CHECK (okSpeak && rate > 8000.0 && speech.getNumSamples() > (int) (rate * 0.5),
+                   "Voicebox /generate/stream (chunked WAV) -> " + juce::String (speech.getNumSamples() / juce::jmax (1.0, rate), 2) + " s " + err);
+            CHECK (voicebox::speak (vbUrl, profileId, spoken, "en", speech, rate, err, nullptr, &cached) && cached,
+                   "second request served from the cache");
+            juce::String badErr;
+            CHECK (! voicebox::speak (vbUrl, "no-such-profile", spoken + " x", "en", speech, rate, badErr) && badErr.contains ("404"),
+                   "unknown profile reported: " + badErr);
+
+            // full neural render with the Voicebox guide (needs the models of test [9])
+            if (NeuralBackend::isCompiledIn() && encPath.isNotEmpty() && voicePath.isNotEmpty()
+                && juce::SystemStats::getEnvironmentVariable ("VOXFORGE_DATA_DIR", {}).isNotEmpty())
+            {
+                juce::File (encPath).copyFileTo (Paths::contentEncoder());
+                VoiceModel v;
+                v.name = "test"; v.id = "test-voice"; v.engine = "neural";
+                v.folder = juce::File (voicePath).getParentDirectory();
+                v.neuralModel = juce::File (voicePath).getFileName();
+                v.neuralSampleRate = juce::SystemStats::getEnvironmentVariable ("VF_VOICE_RATE", "48000").getDoubleValue();
+                v.neuralHop = juce::SystemStats::getEnvironmentVariable ("VF_VOICE_HOP", "960").getIntValue();
+                RenderEngine re;
+                RenderRequest rq;
+                rq.project = prj; rq.settings = ex; rq.voice = v; rq.hostRate = 44100.0; rq.hash = "vbtest";
+                rq.voiceboxGuide = true; rq.voiceboxUrl = vbUrl; rq.voiceboxProfile = profileId; rq.voiceboxLanguage = "en";
+                re.request (rq);
+                std::shared_ptr<RenderedTake> take;
+                const auto deadline = juce::Time::getMillisecondCounter() + 10u * 60u * 1000u;
+                while (take == nullptr && juce::Time::getMillisecondCounter() < deadline)
+                {
+                    juce::Thread::sleep (100);
+                    take = re.takeFinished();
+                }
+                CHECK (take != nullptr, "render finished: " + (take ? take->summary : re.status()));
+                if (take != nullptr)
+                {
+                    const float pk = take->engineAudio.getMagnitude (0, 0, take->engineAudio.getNumSamples());
+                    CHECK (take->neural && take->summary.contains ("Voicebox guide 1/1"), "neural render used the Voicebox guide");
+                    CHECK (pk > 0.01f && std::isfinite (pk), "guided render has signal (peak " + juce::String (pk, 3) + ")");
+                    writeWav (out.getChildFile ("twinkle_voicebox_guide.wav"), take->engineAudio, kEngineSampleRate);
+                }
+            }
+        }
     }
 
     std::cout << "\n" << (failures == 0 ? "ALL TESTS PASSED" : juce::String (failures) + " FAILURE(S)") << "\n";

@@ -68,6 +68,7 @@ juce::ValueTree VocalProject::toValueTree() const
         t.setProperty ("p", n.pitch, nullptr);
         t.setProperty ("v", n.velocity, nullptr);
         t.setProperty ("ly", n.lyric, nullptr);
+        if (! n.wordStart) t.setProperty ("ws", false, nullptr);
         if (n.phonemes.isNotEmpty())      t.setProperty ("ph", n.phonemes, nullptr);
         if (n.pitchOffsetCents != 0.0f)   t.setProperty ("pc", n.pitchOffsetCents, nullptr);
         if (n.fromSource)
@@ -110,6 +111,7 @@ void VocalProject::fromValueTree (const juce::ValueTree& v)
         n.srcStartSec = t.getProperty ("ss", -1.0);
         n.srcEndSec   = t.getProperty ("se", -1.0);
         n.srcLyric    = t.getProperty ("sl").toString();
+        n.wordStart   = (bool) t.getProperty ("ws", true);
         notes.push_back (n);
     }
     curveFromTree (v.getChildWithName ("PitchBend"), pitchBend);
@@ -125,7 +127,7 @@ juce::String VocalProject::contentHash (const ExpressionSettings& e, const juce:
     mo << voiceId << "|" << bpm << "|" << stemPath << "|" << stemOffsetBeats;
     for (auto& n : notes)
         mo << n.startBeat << n.lengthBeats << n.pitch << n.velocity << n.lyric << n.phonemes
-           << n.pitchOffsetCents << (int) n.fromSource << n.srcStartSec << n.srcEndSec;
+           << n.pitchOffsetCents << (int) n.wordStart << (int) n.fromSource << n.srcStartSec << n.srcEndSec;
     for (auto* c : { &pitchBend, &modWheel, &breathCC, &expressionCC })
         for (auto& p : *c) mo << p.beat << p.value;
     mo.write (&e, sizeof (e));

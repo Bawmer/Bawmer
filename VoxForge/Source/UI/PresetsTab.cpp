@@ -192,6 +192,58 @@ PresetsTab::PresetsTab (VoxForgeProcessor& p) : proc (p)
             proc.lastMessage = "Pronunciation dictionary: " + juce::String (n) + " words";
         });
     };
+    // ---- Voicebox ---------------------------------------------------------------------
+    voiceboxLabel.setText ("Voicebox", juce::dontSendNotification);
+    voiceboxLabel.setTooltip ("Voicebox: a free local voice studio (Qwen3-TTS voice cloning). VoxForge can use it as a "
+                              "natural pronunciation guide and to train voices from a few seconds of audio.");
+    addAndMakeVisible (voiceboxLabel);
+    voiceboxUrlEditor.setText (Settings::get().voiceboxUrl(), false);
+    voiceboxUrlEditor.setTextToShowWhenEmpty (voicebox::kDefaultUrl, Colours::dim);
+    voiceboxUrlEditor.onTextChange = [this]
+    {
+        auto u = voiceboxUrlEditor.getText().trim();
+        Settings::get().props().setValue ("voiceboxUrl", u.isNotEmpty() ? u : juce::String (voicebox::kDefaultUrl));
+        Settings::get().props().saveIfNeeded();
+    };
+    addAndMakeVisible (voiceboxUrlEditor);
+    voiceboxConnectBtn.setTooltip ("Read the voice profiles from the running Voicebox app");
+    voiceboxConnectBtn.onClick = [this] { connectVoicebox(); };
+    addAndMakeVisible (voiceboxConnectBtn);
+    voiceboxProfileBox.setTextWhenNothingSelected ("guide voice profile (click Connect)");
+    voiceboxProfileBox.setTooltip ("Voicebox profile that speaks the lyrics. Its timbre does not matter much: "
+                                   "only its pronunciation and timing are used, the neural voice provides the timbre.");
+    voiceboxProfileBox.onChange = [this]
+    {
+        const int i = voiceboxProfileBox.getSelectedId() - 1;
+        if (i < 0 || i >= (int) voiceboxProfiles.size()) return;
+        auto& pr = Settings::get().props();
+        pr.setValue ("voiceboxGuideProfile", voiceboxProfiles[(size_t) i].id);
+        pr.setValue ("voiceboxGuideProfileName", voiceboxProfiles[(size_t) i].name);
+        pr.setValue ("voiceboxGuideLanguage", voiceboxProfiles[(size_t) i].language);
+        pr.saveIfNeeded();
+    };
+    addAndMakeVisible (voiceboxProfileBox);
+    if (Settings::get().voiceboxGuideProfile().isNotEmpty())
+    {
+        voiceboxProfiles.push_back ({ Settings::get().voiceboxGuideProfile(),
+                                      Settings::get().props().getValue ("voiceboxGuideProfileName", "saved profile"),
+                                      Settings::get().voiceboxGuideLanguage() });
+        fillVoiceboxProfiles();
+    }
+    voiceboxGuideToggle.setTooltip ("When rendering MIDI with a neural voice, Voicebox speaks the lyrics of each phrase and "
+                                    "VoxForge aligns that speech to your notes instead of the built-in robotic guide. "
+                                    "Clearer, more natural words. The first render of a phrase waits for Voicebox; "
+                                    "after that it is cached.");
+    voiceboxGuideToggle.setToggleState (Settings::get().useVoiceboxGuide(), juce::dontSendNotification);
+    voiceboxGuideToggle.onClick = [this]
+    {
+        Settings::get().props().setValue ("voiceboxGuide", voiceboxGuideToggle.getToggleState());
+        Settings::get().props().saveIfNeeded();
+        if (voiceboxGuideToggle.getToggleState() && Settings::get().voiceboxGuideProfile().isEmpty())
+            statusLabel.setText ("Click Connect and choose a Voicebox profile to use as the pronunciation guide.", juce::dontSendNotification);
+    };
+    addAndMakeVisible (voiceboxGuideToggle);
+
     styleDim (statusLabel, 12.5f);
     statusLabel.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (statusLabel);
@@ -201,10 +253,46 @@ PresetsTab::PresetsTab (VoxForgeProcessor& p) : proc (p)
 
 void PresetsTab::paint (juce::Graphics& g) { g.fillAll (Colours::bg); }
 
+void PresetsTab::fillVoiceboxProfiles()
+{
+    voiceboxProfileBox.clear (juce::dontSendNotification);
+    const auto current = Settings::get().voiceboxGuideProfile();
+    for (size_t i = 0; i < voiceboxProfiles.size(); ++i)
+    {
+        voiceboxProfileBox.addItem (voiceboxProfiles[i].name + "  (" + voiceboxProfiles[i].language + ")", (int) i + 1);
+        if (voiceboxProfiles[i].id == current) voiceboxProfileBox.setSelectedId ((int) i + 1, juce::dontSendNotification);
+    }
+}
+
+void PresetsTab::connectVoicebox()
+{
+    const auto url = Settings::get().voiceboxUrl();
+    statusLabel.setText ("Connecting to Voicebox at " + url + " ...", juce::dontSendNotification);
+    juce::Component::SafePointer<PresetsTab> sp (this);
+    juce::Thread::launch ([sp, url]
+    {
+        std::vector<voicebox::Profile> profiles;
+        juce::String err;
+        const bool ok = voicebox::listProfiles (url, profiles, err);
+        juce::MessageManager::callAsync ([sp, ok, profiles, err]
+        {
+            if (sp == nullptr) return;
+            if (! ok) { sp->statusLabel.setText ("Voicebox: " + err, juce::dontSendNotification); return; }
+            sp->voiceboxProfiles = profiles;
+            sp->fillVoiceboxProfiles();
+            if (sp->voiceboxProfileBox.getSelectedId() == 0 && ! profiles.empty())
+                sp->voiceboxProfileBox.setSelectedId (1, juce::sendNotificationSync);
+            sp->statusLabel.setText ("Voicebox connected: " + juce::String ((int) profiles.size()) + " voice profile(s)."
+                                     + (profiles.empty() ? "  Create a profile in Voicebox first." : juce::String()),
+                                     juce::dontSendNotification);
+        });
+    });
+}
+
 void PresetsTab::resized()
 {
     auto r = getLocalBounds().reduced (10);
-    auto settings = r.removeFromBottom (200);
+    auto settings = r.removeFromBottom (240);
     r.removeFromBottom (10);
     auto left = r.removeFromLeft (r.getWidth() * 45 / 100);
     r.removeFromLeft (10);
@@ -243,6 +331,15 @@ void PresetsTab::resized()
     lyricsModelBox.setBounds (row.removeFromLeft (280).reduced (0, 2));
     row.removeFromLeft (14);
     gpuToggle.setBounds (row.removeFromLeft (340));
+    sc.removeFromTop (6);
+    row = sc.removeFromTop (30);
+    voiceboxLabel.setBounds (row.removeFromLeft (130));
+    voiceboxUrlEditor.setBounds (row.removeFromLeft (210).reduced (0, 2));
+    voiceboxConnectBtn.setBounds (row.removeFromLeft (90).reduced (2));
+    row.removeFromLeft (8);
+    voiceboxProfileBox.setBounds (row.removeFromLeft (260).reduced (0, 2));
+    row.removeFromLeft (14);
+    voiceboxGuideToggle.setBounds (row.removeFromLeft (320));
     sc.removeFromTop (6);
     row = sc.removeFromTop (32);
     openFolderBtn.setBounds (row.removeFromLeft (150).reduced (2));

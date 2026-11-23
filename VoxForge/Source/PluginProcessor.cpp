@@ -406,8 +406,11 @@ juce::String VoxForgeProcessor::currentHash() const
 {
     const auto modelStamp = voice.isNeural() ? juce::String (voice.neuralModelFile().getLastModificationTime().toMilliseconds()) : juce::String();
     const auto replace = proj.stemPath.isNotEmpty() && std::any_of (proj.notes.begin(), proj.notes.end(), [] (const Note& n) { return n.fromSource; });
+    const auto& st = Settings::get();
+    const auto guide = voice.isNeural() && ! replace && st.useVoiceboxGuide() && st.voiceboxGuideProfile().isNotEmpty()
+                         ? "|vb:" + st.voiceboxGuideProfile() + ":" + st.voiceboxGuideLanguage() : juce::String();
     return proj.contentHash (expressionSettings(), voice.id + modelStamp + juce::String (voice.timbre.formantScale)
-                             + (replace ? "R" : "S"));
+                             + (replace ? "R" : "S") + guide);
 }
 
 void VoxForgeProcessor::renderNow()
@@ -419,6 +422,11 @@ void VoxForgeProcessor::renderNow()
     r.replaceMode = proj.stemPath.isNotEmpty()
                     && std::any_of (proj.notes.begin(), proj.notes.end(), [] (const Note& n) { return n.fromSource; });
     r.hostRate = sampleRate;
+    const auto& st = Settings::get();
+    r.voiceboxGuide = st.useVoiceboxGuide() && st.voiceboxGuideProfile().isNotEmpty();
+    r.voiceboxUrl = st.voiceboxUrl();
+    r.voiceboxProfile = st.voiceboxGuideProfile();
+    r.voiceboxLanguage = st.voiceboxGuideLanguage();
     r.hash = currentHash();
     lastRequestedHash = r.hash;
     renderEngine.request (std::move (r));
@@ -514,7 +522,8 @@ void VoxForgeProcessor::voicesChanged()
     if (presetManager.find (voice.id) == nullptr) selectVoice ("builtin-default", false);
 }
 
-void VoxForgeProcessor::startNeuralTraining (const VoiceModel& v, int epochs, const juce::String& quality)
+void VoxForgeProcessor::startNeuralTraining (const VoiceModel& v, int epochs, const juce::String& quality,
+                                             const juce::StringArray& extraArgs)
 {
     if (trainJob != nullptr) return;
     juce::StringArray args { "train",
@@ -524,6 +533,7 @@ void VoxForgeProcessor::startNeuralTraining (const VoiceModel& v, int epochs, co
                              "--epochs", juce::String (epochs),
                              "--quality", quality };
     if (Settings::get().useGpu()) args.add ("--gpu");
+    args.addArray (extraArgs);
     args.add ("--samples");
     for (auto& s : v.samples) args.add (v.folder.getChildFile (s).getFullPathName());
 

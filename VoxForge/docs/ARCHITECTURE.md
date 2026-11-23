@@ -98,6 +98,25 @@ rebuilds the generator from the stored config, and exports it through the same w
 stores the model's sample rate and hop (`sr / 50` samples per 50 fps frame). The plug-in synthesises
 at that rate and resamples the result to 48 kHz.
 
+### Voicebox
+
+[Voicebox](https://github.com/jamiepine/voicebox) (MIT) is a local voice studio with a REST API
+(default `http://127.0.0.1:17493`). `Engine/Voicebox.*` is a small HTTP/1.1 client over a socket
+(localhost, no proxy, chunked responses). It reads `GET /profiles`, and `POST /generate/stream`
+returns WAV. Results are cached in `Cache/voicebox/` by profile, language and text.
+
+- **Pronunciation guide (MIDI renders).** Notes are split into phrases at rests ≥ 0.3 s
+  (at most 12 s; longer runs are split at their largest gap). Each phrase's syllables are joined
+  into words using `Note::wordStart`, set when lyrics are applied, and Voicebox speaks them. The
+  speech is trimmed and encoded to HuBERT units. `GuideAlign` warps the units onto the DSP guide's
+  units for the same frames: DTW on cosine distance, steps (1,1), (1,0) and (0,1) with a small
+  repeat penalty, averaging the speech frames mapped to each guide frame. The result replaces
+  the guide units inside the phrase, with a 4-frame cross-fade at its edges. f0 and voicing still
+  come from the control curves and the phoneme timeline.
+- **Training source.** `train --voicebox-profile` generates speech from a built-in corpus of 100
+  varied sentences, three per request with a new seed each time, until the requested duration
+  is reached. The usual fine-tuning then runs on those clips.
+
 ### Rendering with a neural voice
 
 - **From MIDI.** The DSP engine renders a neutral guide vocal that carries the timing and

@@ -37,9 +37,19 @@ jobs:
           voxforge-engine import-model --model applio48k.pth --out imported/applio48k.onnx
           voxforge-engine import-model --model applio40k.pth --out imported/applio40k.onnx
           ls -la imported
-      - name: Lyrics extraction - recording with known words (espeak-ng) through the engine
+      - name: Voicebox - train a neural voice from a Voicebox profile (mock Voicebox API)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng
+          python VoxForge/engine/tests/mock_voicebox.py --port 17493 > mock_voicebox.log 2>&1 &
+          sleep 2
+          voxforge-engine voicebox-profiles | tee vbprofiles.jsonl
+          grep -q '"Test Voice"' vbprofiles.jsonl
+          voxforge-engine train --voice-dir vbwork --models-dir models --voicebox-profile "test voice" --voicebox-minutes 0.5 --epochs 1 --quality fast --max-steps-per-epoch 2 --no-download | tee vbtrain.jsonl
+          grep -q '"type": "result"' vbtrain.jsonl
+          ls -la vbwork/samples/voicebox vbwork/voice.onnx
+          cat mock_voicebox.log | head -5
+      - name: Lyrics extraction - recording with known words (espeak-ng) through the engine
+        run: |
           espeak-ng -s 120 -w lyrics.wav "twinkle twinkle little star how I wonder what you are"
           voxforge-engine transcribe --audio lyrics.wav --language en --model small --models-dir models | tee transcribe.jsonl
           grep -q '"type": "result"' transcribe.jsonl
@@ -55,6 +65,10 @@ jobs:
           export VOXFORGE_ENGINE_COMMAND="$(which voxforge-engine)"
           export VF_LYRICS_STEM="$PWD/lyrics.wav"
           export VF_LYRICS_EXPECT="twinkle little star wonder what"
+          python VoxForge/engine/tests/mock_voicebox.py --port 17494 > mock_voicebox_cpp.log 2>&1 &
+          sleep 2
+          export VF_VOICEBOX_URL="http://127.0.0.1:17494"
+          export VOXFORGE_DATA_DIR="$PWD/vfdata-linux"
           ./build-linux/VoxForgeTests_artefacts/Release/VoxForgeTests test-output-linux
       - uses: actions/upload-artifact@v4
         with:
@@ -111,12 +125,20 @@ jobs:
             $env:VF_VOICE_MODEL = (Resolve-Path test-models\work\voice.onnx).Path
           } else { Write-Warning "No trained test models (engine job failed) - neural test [9] skipped" }
           Copy-Item "$env:ORT_ROOT\runtimes\win-x64\native\*.dll" build\VoxForgeTests_artefacts\Release\
+          if (Test-Path test-models\lyrics.wav) {
+            # stand-in for the Voicebox app: answers with the espeak recording of the test lyrics
+            Start-Process python -ArgumentList "VoxForge\engine\tests\mock_voicebox.py","--port","17493","--wav","test-models\lyrics.wav" -NoNewWindow
+            Start-Sleep -Seconds 3
+            $env:VF_VOICEBOX_URL = "http://127.0.0.1:17493"
+          }
+          $env:VOXFORGE_DATA_DIR = "$pwd\vfdata48"
           & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Test-Path test-models\imported\applio40k.onnx) {
             Write-Host "--- imported Applio/RVC 40 kHz model through the plug-in backend ---"
             $env:VF_VOICE_MODEL = (Resolve-Path test-models\imported\applio40k.onnx).Path
             $env:VF_VOICE_RATE = "40000"; $env:VF_VOICE_HOP = "800"
+            $env:VOXFORGE_DATA_DIR = "$pwd\vfdata40"
             & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output-40k
             exit $LASTEXITCODE
           }

@@ -75,7 +75,9 @@ set(VOXFORGE_ENGINE_SOURCES
     Source/Engine/NeuralBackend.cpp
     Source/Engine/EngineClient.cpp
     Source/Engine/RenderEngine.cpp
-    Source/Engine/StemAnalyzer.cpp)
+    Source/Engine/StemAnalyzer.cpp
+    Source/Engine/Voicebox.cpp
+    Source/Engine/GuideAlign.cpp)
 
 target_sources(VoxForge PRIVATE
     ${VOXFORGE_ENGINE_SOURCES}

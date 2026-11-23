@@ -110,7 +110,8 @@ public:
     // voice cloning
     std::unique_ptr<vf::EngineJob> trainJob;
     juce::String trainingVoiceId;
-    void startNeuralTraining (const vf::VoiceModel& v, int epochs, const juce::String& quality);
+    void startNeuralTraining (const vf::VoiceModel& v, int epochs, const juce::String& quality,
+                              const juce::StringArray& extraArgs = {});
     void cancelTraining();
 
     juce::String lastMessage;                          // status line text

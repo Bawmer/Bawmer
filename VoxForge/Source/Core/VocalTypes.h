@@ -24,6 +24,7 @@ struct Note
     juce::String lyric = "la";        // syllable shown on the note, "-" = hold previous vowel (melisma)
     juce::String phonemes;            // optional explicit ARPAbet override, e.g. "hh ax l ow"
     float  pitchOffsetCents = 0.0f;   // fine tune per note
+    bool   wordStart = true;          // syllable starts a new word ("hap" true, "py" false)
 
     // ---- vocal replacement -------------------------------------------------
     bool   fromSource   = false;      // note was detected in the loaded stem
