@@ -52,6 +52,7 @@ juce_add_plugin(VoxForge
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     VST3_CATEGORIES             Instrument Synth
+    VST3_AUTO_MANIFEST          FALSE   # moduleinfo.json is optional; the helper tool crashes on Windows runners
     COPY_PLUGIN_AFTER_BUILD     FALSE)
 
 juce_generate_juce_header(VoxForge)
