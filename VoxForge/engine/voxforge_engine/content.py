@@ -1,8 +1,10 @@
 """Speaker-independent phonetic content features ("units").
 
 We use the output of transformer layer 12 of HuBERT-Base (torchaudio bundle of
-fairseq's hubert_base_ls960), 768-dim at 50 frames/s on 16 kHz audio - exactly the
-features RVC v2 was trained on, so the pretrained RVC v2 base model can be used.
+fairseq's hubert_base_ls960), 768-dim at 50 frames/s on 16 kHz audio. RVC v2 (and Applio's
+default "contentvec" embedder) uses ContentVec, a speaker-disentangled fine-tune of the same
+HuBERT-Base network with the same layer/dimension, so the RVC v2 base model and imported voices
+accept these features; they are close to, but not identical with, the features RVC trained on.
 """
 from __future__ import annotations
 

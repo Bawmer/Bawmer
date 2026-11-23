@@ -121,20 +121,34 @@ Tick *Start neural training right after cloning* to do steps 3 and 4 in one go.
 
 ### Use a voice trained in Applio (or RVC WebUI)
 
-VoxForge's neural voices use the RVC v2 architecture, the same one [Applio](https://github.com/IAHispano/Applio)
-uses for its standard voice models. You can train a voice in Applio's app, with its large choice of
-community base models, and sing it in VoxForge:
+VoxForge's neural voices are RVC v2 models, the same architecture as the standard voice models
+of [Applio](https://github.com/IAHispano/Applio) and RVC WebUI. You can train a voice in Applio
+and sing it in VoxForge:
 
-1. In Applio, train with **RVC v2**, **pitch guidance on**, the **HiFi-GAN** vocoder and the
-   **contentvec** embedder (Applio's defaults). Any sample rate works: 32, 40 or 48 kHz.
-2. Take the small inference model Applio exports (`logs/<name>/<name>.pth`, typically 50–60 MB).
-   Don't use the large `G_*.pth` training checkpoints.
-3. In VoxForge, go to **Presets → Import Applio / RVC model…**, pick the `.pth` file and name the voice.
-   The engine converts it once to `voice.onnx`, and the voice appears as a **NEURAL** preset.
+1. **Train in Applio** with the **HiFi-GAN** vocoder (the default) at 32, 40 or 48 kHz. Applio
+   always trains RVC v2 models with pitch guidance, which is what VoxForge needs. Keep the
+   **contentvec** embedder (the default); see the note on pronunciation below.
+2. **Find the inference model.** Applio saves it in `logs/<name>/` as
+   `<name>_<epochs>e_<steps>s.pth` (about 55 MB). If there are several, take the one with the most
+   epochs, or the one that sounded best in Applio. Don't use `G_*.pth` or `D_*.pth`; those are training
+   checkpoints. For RVC WebUI, use the `.pth` from its `weights` folder.
+3. **Import it.** In VoxForge, go to **Presets → Import Applio / RVC model...**, pick the `.pth`
+   and name the voice. The engine converts it once to `voice.onnx`, which takes up to a minute. The voice is
+   saved as a **NEURAL** preset and selected right away. Its notes show the source file and sample rate.
 
-Not supported: RVC v1 models, models without pitch guidance, and Applio's RefineGAN/MRF vocoders.
-VoxForge tells you which one applies. The `.index` file (feature retrieval) isn't used. Only import
-voices you have the right to use.
+The import needs the VoxForge Engine (`install_engine.ps1`), which also installs the shared content
+encoder that every neural voice uses. Without the engine, VoxForge shows how to install it. After
+the import, the voice renders without Python.
+
+**Not supported:** Applio's RefineGAN vocoder, RVC v1 models, and models trained without pitch
+guidance (older RVC WebUI models only). The import stops with a message that names the reason.
+The `.index` file (feature retrieval) isn't used. Only import voices you have the right to use.
+
+**Pronunciation.** VoxForge feeds the model content features from HuBERT-Base. Applio's
+*contentvec* embedder is a speaker-disentangled variant of the same network, so the features are
+similar but not identical. An imported voice can therefore sound slightly less clear, or carry a
+little less of its own timbre, than it does in Applio. Voices trained with another embedder (for example
+*spin-v2*) differ more, and VoxForge warns about this in the voice notes and the status line.
 
 ---
 

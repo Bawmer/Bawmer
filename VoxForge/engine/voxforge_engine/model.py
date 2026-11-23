@@ -270,6 +270,6 @@ def import_rvc_model(path: str, out_onnx: str) -> dict:
     weights, cfg, info = read_rvc_model(path)
     export_voice_onnx(weights, out_onnx, config=cfg)
     if info["embedder"] not in ("contentvec", "hubert_base", "hubert-base", ""):
-        info["warning"] = (f"Model was trained with the '{info['embedder']}' embedder; VoxForge uses ContentVec/"
-                           "HuBERT-base features, so pronunciation may be less accurate.")
+        info["warning"] = (f"Model was trained with the '{info['embedder']}' embedder; VoxForge feeds HuBERT-Base "
+                           "features, so pronunciation and timbre may be less accurate.")
     return info
