@@ -1,0 +1,61 @@
+name: VoxForge (Windows x64 VST3)
+
+on:
+  push:
+    paths:
+      - "VoxForge/**"
+      - ".github/workflows/voxforge-windows.yml"
+  pull_request:
+    paths:
+      - "VoxForge/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    env:
+      ORT_VERSION: "1.20.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ONNX Runtime
+        shell: pwsh
+        run: |
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip"
+          Invoke-WebRequest $url -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath .
+          "ORT_ROOT=$pwd\onnxruntime-win-x64-$env:ORT_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S VoxForge -B build -G "Visual Studio 17 2022" -A x64
+          -DVOXFORGE_WITH_ONNX=ON -DONNXRUNTIME_ROOT="$env:ORT_ROOT" -DVOXFORGE_BUILD_TESTS=ON
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Engine tests
+        run: build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
+
+      - name: Host smoke test (loads the .vst3 like a DAW)
+        run: build\VoxForgeHostTest_artefacts\Release\VoxForgeHostTest.exe build\VoxForge_artefacts\Release\VST3\VoxForge.vst3
+
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $pkg = "package\VoxForge-win-x64"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item -Recurse build\VoxForge_artefacts\Release\VST3\VoxForge.vst3 $pkg
+          Copy-Item build\VoxForge_artefacts\Release\Standalone\VoxForge.exe $pkg
+          Copy-Item "$env:ORT_ROOT\lib\*.dll" $pkg
+          Copy-Item -Recurse VoxForge\engine "$pkg\engine"
+          Copy-Item VoxForge\scripts\install_engine.ps1 $pkg
+          Copy-Item VoxForge\docs\USER_MANUAL.md $pkg
+          Copy-Item -Recurse build\test-output "$pkg\test-renders"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoxForge-win-x64
+          path: package/VoxForge-win-x64
+          retention-days: 30

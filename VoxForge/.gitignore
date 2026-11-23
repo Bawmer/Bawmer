@@ -1,0 +1,9 @@
+build/
+build-*/
+out/
+test-output/
+engine/dist/
+engine/build/
+engine/*.egg-info/
+__pycache__/
+*.pyc

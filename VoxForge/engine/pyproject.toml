@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voxforge-engine"
+version = "1.0.0"
+description = "Local neural voice training and lyrics transcription for the VoxForge VST3 plug-in"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "pyworld>=0.3.4",
+    "scipy>=1.10",
+    "onnx>=1.15",
+    "onnxruntime>=1.17",
+    "faster-whisper>=1.0",
+]
+
+[project.scripts]
+voxforge-engine = "voxforge_engine.__main__:main"
+
+[tool.setuptools]
+packages = ["voxforge_engine"]

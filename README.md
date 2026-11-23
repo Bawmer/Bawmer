@@ -6,6 +6,9 @@ automatically and exported as MP4 for YouTube, Reels, TikTok or Shorts.
 
 **CONNECT PHONE → CONNECT DAW → PREVIEW → RECORD → EXPORT**
 
+> **Also in this repo: [VoxForge](VoxForge/README.md)**, a Windows x64 VST3 AI vocal synth with voice cloning,
+> MIDI + lyrics singing and vocal replacement (`VoxForge/`).
+
 ## Download
 
 Windows x64: [`release/DAW-LIVE-CAM-win-x64.exe`](release/DAW-LIVE-CAM-win-x64.exe) — portable, double-click to run (unsigned: SmartScreen → *More info* → *Run anyway*).
