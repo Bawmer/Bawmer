@@ -32,6 +32,20 @@ class ContentEncoder:
             return feats[-1][0].float().cpu().numpy()
 
 
+def stamp_path(onnx_path: str) -> str:
+    return os.path.splitext(onnx_path)[0] + ".json"
+
+
+def is_current(onnx_path: str) -> bool:
+    """True if the exported encoder exists and was made with the current layer (12)."""
+    import json
+    try:
+        with open(stamp_path(onnx_path)) as f:
+            return os.path.exists(onnx_path) and json.load(f).get("layer") == LAYER
+    except (OSError, ValueError):
+        return False
+
+
 def export_onnx(path: str, device: str = "cpu", opset: int = 17) -> str:
     """Exports the content encoder: input 'audio' [1, N] -> output 'units' [1, T, 768]."""
     import torch
@@ -55,4 +69,7 @@ def export_onnx(path: str, device: str = "cpu", opset: int = 17) -> str:
                 dynamic_axes={"audio": {1: "samples"}, "units": {1: "frames"}},
                 opset_version=opset, do_constant_folding=True)
     os.replace(tmp, path)
+    import json
+    with open(stamp_path(path), "w") as f:
+        json.dump({"model": "torchaudio.HUBERT_BASE", "layer": LAYER, "frames_per_second": 50}, f)
     return path

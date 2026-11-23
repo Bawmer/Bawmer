@@ -91,7 +91,7 @@ def download_base(models_dir: str, progress=None) -> dict:
                     progress((i + done / total) / len(files), f"Downloading {name} ({done >> 20} MB)")
         os.replace(tmp, path)
     # sanity check: loadable and shaped like RVC v2 48k
-    g = torch.load(files["f0G48k.pth"], map_location="cpu", weights_only=False)
+    g = torch.load(files["f0G48k.pth"], map_location="cpu", weights_only=True)   # tensors only, no pickle code
     sd = g["model"] if "model" in g else g
     assert sd["enc_p.emb_phone.weight"].shape[1] == 768, "not an RVC v2 (768-dim) base model"
     return files
@@ -102,7 +102,7 @@ def load_base(G, D, models_dir: str, explicit: str = "", log=print) -> str:
     files, own = base_paths(models_dir)
 
     def sd_of(path):
-        ck = torch.load(path, map_location="cpu", weights_only=False)
+        ck = torch.load(path, map_location="cpu", weights_only=True)   # tensors only: never execute pickled code
         return ck
 
     if explicit:

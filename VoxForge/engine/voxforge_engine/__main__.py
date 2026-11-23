@@ -22,6 +22,13 @@ from . import __version__
 from . import protocol as P
 
 
+def _enc_state(enc: str) -> str:
+    if not enc or not os.path.exists(enc):
+        return "no"
+    from .content import is_current
+    return "yes" if is_current(enc) else "OUTDATED (run export-content-encoder)"
+
+
 def _check(args) -> dict:
     info, missing = {}, []
     for mod in ("numpy", "torch", "torchaudio", "soundfile", "pyworld", "onnx", "onnxruntime", "faster_whisper"):
@@ -42,7 +49,7 @@ def _check(args) -> dict:
                                    or os.path.exists(os.path.join(base_dir, "f0G48k.pth")))
     summary = (f"VoxForge Engine {__version__}, Python {platform.python_version()}, "
                f"GPU: {info.get('cuda_device') or 'none'}, "
-               f"content encoder: {'yes' if enc and os.path.exists(enc) else 'no'}, "
+               f"content encoder: {_enc_state(enc)}, "
                f"base model: {'yes' if has_base else 'no (downloaded on first training)'}"
                + (f", missing: {', '.join(missing)}" if missing else ""))
     return {"summary": summary, "modules": info, "cuda": cuda, "missing": missing}

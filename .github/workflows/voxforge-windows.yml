@@ -63,6 +63,9 @@ jobs:
 
   build:
     needs: engine
+    # still build and test the plug-in if the engine job failed (e.g. a model host is down);
+    # the run stays red, but the plug-in artifact is produced
+    if: ${{ !cancelled() }}
     runs-on: windows-2022
     env:
       ORT_VERSION: "1.20.1"
@@ -87,6 +90,7 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Get the trained test models
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: voxforge-test-models
@@ -95,8 +99,10 @@ jobs:
       - name: Engine tests (incl. neural voice through the C++ ONNX backend)
         shell: pwsh
         run: |
-          $env:VF_CONTENT_ENCODER = (Resolve-Path test-models\models\content_encoder.onnx).Path
-          $env:VF_VOICE_MODEL = (Resolve-Path test-models\work\voice.onnx).Path
+          if ((Test-Path test-models\models\content_encoder.onnx) -and (Test-Path test-models\work\voice.onnx)) {
+            $env:VF_CONTENT_ENCODER = (Resolve-Path test-models\models\content_encoder.onnx).Path
+            $env:VF_VOICE_MODEL = (Resolve-Path test-models\work\voice.onnx).Path
+          } else { Write-Warning "No trained test models (engine job failed) - neural test [9] skipped" }
           Copy-Item "$env:ORT_ROOT\runtimes\win-x64\native\*.dll" build\VoxForgeTests_artefacts\Release\
           & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
           exit $LASTEXITCODE

@@ -20,7 +20,14 @@ def transcribe(args) -> dict:
         device = "cuda" if args.gpu and _cuda() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
         P.progress(0.05, f"Loading Whisper '{model_name}' ({device})", force=True)
-        model = WhisperModel(model_name, device=device, compute_type=compute, download_root=download_root)
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute, download_root=download_root)
+        except Exception as e:  # noqa: BLE001 - missing CUDA/cuDNN runtime etc.
+            if device == "cpu":
+                raise
+            P.log(f"GPU transcription unavailable ({e}); using CPU")
+            device, compute = "cpu", "int8"
+            model = WhisperModel(model_name, device=device, compute_type=compute, download_root=download_root)
 
         def run(vad: bool):
             # Singing-friendly decoding: no conditioning on previous text (prevents the
@@ -41,7 +48,15 @@ def transcribe(args) -> dict:
                 P.progress(0.1 + 0.85 * min(1.0, seg.end / duration), f"{seg.end:.0f}/{duration:.0f} s")
             return info, words, text
 
-        info, words, text = run(vad=True)
+        try:
+            info, words, text = run(vad=True)
+        except RuntimeError as e:          # CUDA libraries load lazily: fall back on first use too
+            if device == "cpu":
+                raise
+            P.log(f"GPU transcription failed ({e}); using CPU")
+            device, compute = "cpu", "int8"
+            model = WhisperModel(model_name, device=device, compute_type=compute, download_root=download_root)
+            info, words, text = run(vad=True)
         if not words:   # the speech VAD can reject singing - retry on the whole file
             P.log("No words with voice-activity detection, retrying without it")
             info, words, text = run(vad=False)

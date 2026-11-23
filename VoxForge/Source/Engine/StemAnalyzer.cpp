@@ -25,7 +25,8 @@ void StemAnalyzer::start (const juce::File& stem, const VocalToMidiOptions& opts
     options = opts;
     doTranscribe = transcribe;
     lang = language;
-    hint = lyricsHint.trim().substring (0, 800);
+    // one line, no quotes: safe on the Windows command line
+    hint = lyricsHint.replaceCharacters ("\r\n\t", "   ").removeCharacters ("\"\\").trim().substring (0, 800);
     cancelFlag = false;
     resultReady = false;
     prog = 0.0f;

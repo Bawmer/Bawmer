@@ -82,7 +82,7 @@ def _batch(items, cache, batch, device):
     for path in random.choices(items, k=batch):
         d = cache.get(path)
         if d is None:
-            d = torch.load(path, weights_only=False)
+            d = torch.load(path, weights_only=True)
             cache[path] = d
         T = d["f0"].shape[0]
         s = random.randint(0, (T - CROP) // 2) * 2                    # even start: aligned with 50 fps units
@@ -131,7 +131,7 @@ def train(args) -> dict:
     resume = os.path.join(ckpt_dir, "latest.pt")
     start_epoch = 0
     if os.path.exists(resume) and not args.pretrain:
-        ck = torch.load(resume, map_location=device, weights_only=False)
+        ck = torch.load(resume, map_location=device, weights_only=True)
         if ck.get("arch") == "rvc-v2-48k":
             G.load_state_dict(ck["G"]); D.load_state_dict(ck["D"])
             start_epoch = ck.get("epoch", 0)
@@ -225,7 +225,8 @@ def train(args) -> dict:
     _verify_onnx(out)
 
     enc_path = os.path.join(models_dir, "content_encoder.onnx")
-    if not os.path.exists(enc_path):
+    from .content import is_current
+    if not is_current(enc_path):          # missing, or an older (layer 9) export -> rebuild
         P.progress(0.98, "Exporting content encoder", force=True)
         from .content import export_onnx
         export_onnx(enc_path)
