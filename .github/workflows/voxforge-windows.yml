@@ -40,6 +40,10 @@ jobs:
       - name: Lyrics extraction - plug-in C++ path (StemAnalyzer -> engine -> words on notes)
         run: |
           sudo apt-get install -y -qq pkg-config libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev mesa-common-dev ninja-build
+          # setup-python overrides PKG_CONFIG_PATH; JUCE finds freetype/alsa through pkg-config
+          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
+          export CPATH="/usr/include/freetype2${CPATH:+:$CPATH}"
+          echo "freetype: $(pkg-config --cflags --libs freetype2)"; ls /usr/include/freetype2 | head -3
           cmake -S VoxForge -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DVOXFORGE_BUILD_TESTS=ON -DVOXFORGE_STANDALONE=OFF
           cmake --build build-linux --target VoxForgeTests -j4
           export VOXFORGE_ENGINE_COMMAND="$(which voxforge-engine)"
