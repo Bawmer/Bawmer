@@ -145,6 +145,17 @@ PresetsTab::PresetsTab (VoxForgeProcessor& p) : proc (p)
         Settings::get().props().saveIfNeeded();
     };
     addAndMakeVisible (langBox);
+    const juce::StringArray models { "tiny", "base", "small", "medium", "large-v3" };
+    lyricsModelBox.addItemList ({ "Lyrics model: tiny (fastest)", "Lyrics model: base", "Lyrics model: small (default)",
+                                  "Lyrics model: medium", "Lyrics model: large-v3 (best, slow)" }, 1);
+    lyricsModelBox.setSelectedId (juce::jmax (1, models.indexOf (Settings::get().lyricsModel()) + 1), juce::dontSendNotification);
+    lyricsModelBox.setTooltip ("Whisper model used to extract lyrics from vocal stems. Larger = more accurate on singing, slower; downloaded once.");
+    lyricsModelBox.onChange = [this, models]
+    {
+        Settings::get().props().setValue ("lyricsModel", models[lyricsModelBox.getSelectedId() - 1]);
+        Settings::get().props().saveIfNeeded();
+    };
+    addAndMakeVisible (lyricsModelBox);
     gpuToggle.setToggleState (Settings::get().useGpu(), juce::dontSendNotification);
     gpuToggle.onClick = [this]
     {
@@ -213,7 +224,9 @@ void PresetsTab::resized()
     row = sc.removeFromTop (30);
     langLabel.setBounds (row.removeFromLeft (130));
     langBox.setBounds (row.removeFromLeft (120).reduced (0, 2));
-    row.removeFromLeft (20);
+    row.removeFromLeft (10);
+    lyricsModelBox.setBounds (row.removeFromLeft (280).reduced (0, 2));
+    row.removeFromLeft (14);
     gpuToggle.setBounds (row.removeFromLeft (340));
     sc.removeFromTop (6);
     row = sc.removeFromTop (32);

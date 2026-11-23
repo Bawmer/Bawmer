@@ -231,6 +231,39 @@ int main (int argc, char** argv)
         writeWav (out.getChildFile ("twinkle_neural.wav"), nbuf, NeuralBackend::kOutputRate);
     }
 
+    // [10] Lyrics extraction through the plug-in's StemAnalyzer + engine process
+    const auto lyricsStem = juce::SystemStats::getEnvironmentVariable ("VF_LYRICS_STEM", {});
+    if (lyricsStem.isNotEmpty())
+    {
+        std::cout << "[10] Lyrics extraction from a recording (StemAnalyzer -> voxforge-engine -> notes)\n";
+        const auto expected = juce::StringArray::fromTokens (juce::SystemStats::getEnvironmentVariable ("VF_LYRICS_EXPECT", {}).toLowerCase(), " ", "");
+        StemAnalyzer analyzer;
+        analyzer.start (juce::File (lyricsStem), {}, true, "en");
+        const auto deadline = juce::Time::getMillisecondCounter() + 15u * 60u * 1000u;
+        while (! analyzer.hasResult() && juce::Time::getMillisecondCounter() < deadline)
+            juce::Thread::sleep (200);
+        CHECK (analyzer.hasResult(), "analysis finished");
+        auto r = analyzer.takeResult();
+        std::cout << "  transcript: \"" << r.transcript << "\"  (" << r.words.size() << " words) " << r.transcriptionNote << "\n";
+        int found = 0;
+        const auto got = r.transcript.toLowerCase().retainCharacters ("abcdefghijklmnopqrstuvwxyz ");
+        for (auto& w : expected) found += got.contains (w) ? 1 : 0;
+        CHECK (r.ok && ! r.words.empty(), "words with timestamps returned");
+        CHECK (expected.isEmpty() || found * 10 >= expected.size() * 6,
+               "recognised " + juce::String (found) + "/" + juce::String (expected.size()) + " expected words");
+        bool monotonic = true;
+        for (size_t i = 1; i < r.words.size(); ++i) monotonic &= r.words[i].t0 >= r.words[i - 1].t0 - 0.05;
+        CHECK (monotonic, "word timestamps are in order");
+        VocalProject lp;
+        lp.bpm = 120.0;
+        lp.stemPath = lyricsStem;
+        notesFromAnalysis (r, lp);
+        int lyricNotes = 0;
+        for (auto& n : lp.notes) lyricNotes += (n.lyric != juce::String::charToString ((juce::juce_wchar) 0x2022)) ? 1 : 0;
+        std::cout << "  " << lp.notes.size() << " notes, " << lyricNotes << " with recognised syllables; lyrics: " << lp.lyricsText << "\n";
+        CHECK (lyricNotes > 0 && lp.lyricsText.isNotEmpty(), "recognised words were placed on notes");
+    }
+
     std::cout << "\n" << (failures == 0 ? "ALL TESTS PASSED" : juce::String (failures) + " FAILURE(S)") << "\n";
     std::cout << "WAV files written to " << out.getFullPathName() << "\n";
     return failures == 0 ? 0 : 1;

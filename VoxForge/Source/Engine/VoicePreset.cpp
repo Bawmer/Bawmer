@@ -37,12 +37,15 @@ Settings::Settings()
 
 juce::String Settings::engineCommand() const { return file->getValue ("engineCommand"); }
 juce::String Settings::language() const      { return file->getValue ("language", "auto"); }
+juce::String Settings::lyricsModel() const   { return file->getValue ("lyricsModel", "small"); }
 bool Settings::useGpu() const                { return file->getBoolValue ("useGpu", true); }
 
 juce::StringArray Settings::resolveEngineCommand() const
 {
     juce::StringArray cmd;
-    const auto custom = engineCommand().trim();
+    // VOXFORGE_ENGINE_COMMAND overrides everything (CI, portable setups)
+    auto custom = juce::SystemStats::getEnvironmentVariable ("VOXFORGE_ENGINE_COMMAND", {}).trim();
+    if (custom.isEmpty()) custom = engineCommand().trim();
     if (custom.isNotEmpty())
     {
         cmd.addTokens (custom, " ", "\"");

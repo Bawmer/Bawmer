@@ -27,6 +27,7 @@ public:
     juce::String engineCommand() const;      // user override; empty = auto
     juce::StringArray resolveEngineCommand() const;   // command prefix to launch the trainer/transcriber
     juce::String language() const;           // whisper language code or "auto"
+    juce::String lyricsModel() const;        // whisper model size: tiny, base, small, medium, large-v3
     bool useGpu() const;
 
 private:

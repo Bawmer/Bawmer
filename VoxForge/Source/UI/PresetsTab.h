@@ -37,7 +37,7 @@ private:
                      dictBtn { "Load CMU dictionary..." };
     juce::Label engineLabel, langLabel, statusLabel;
     juce::TextEditor engineEditor;
-    juce::ComboBox langBox;
+    juce::ComboBox langBox, lyricsModelBox;
     juce::ToggleButton gpuToggle { "Use GPU (CUDA) for training / transcription" };
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::AlertWindow> nameWindow;

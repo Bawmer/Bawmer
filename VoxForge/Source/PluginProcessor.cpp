@@ -614,7 +614,9 @@ bool VoxForgeProcessor::loadStem (const juce::File& f, juce::String& error)
 void VoxForgeProcessor::analyseStem (const VocalToMidiOptions& opts, bool transcribe)
 {
     if (proj.stemPath.isEmpty()) return;
-    analyzer.start (juce::File (proj.stemPath), opts, transcribe, Settings::get().language());
+    // lyrics already typed in the editor (not the "•" placeholders) help the recogniser
+    const auto hint = proj.lyricsText.containsChar ((juce::juce_wchar) 0x2022) ? juce::String() : proj.lyricsText;
+    analyzer.start (juce::File (proj.stemPath), opts, transcribe, Settings::get().language(), hint);
 }
 
 bool VoxForgeProcessor::applyStemAnalysis()

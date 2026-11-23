@@ -180,9 +180,16 @@ During playback, the render takes over.
 2. **Analyse.** Click **Analyse stem**. VoxForge runs:
    - **Vocal-to-MIDI**: pitch tracking and note segmentation. *Sensitivity*, *Min note length*
      and *Split on pitch change* tune how many notes are found.
-   - **Lyrics extraction**: offline speech recognition (Whisper) with word timestamps. Each
-     word's syllables are placed on its notes. This needs the VoxForge Engine. Without it,
-     notes show `•`, which means "keep the original sound", and you type the words yourself.
+   - **Lyrics extraction**: offline speech recognition (Whisper, via the VoxForge Engine) pulls the
+     words out of the recording with a timestamp for every word, and each word's syllables are
+     placed on the notes sung at that moment. The transcript also appears in the Lyrics box.
+     Tips for singing:
+     - Choose the model in *Presets → Settings → Lyrics model*. *small* is the default; *medium* or
+       *large-v3* are clearly better on sung vowels (slower, downloaded once).
+     - Set *Lyrics language* if auto-detection picks the wrong language.
+     - If you already know the lyrics, paste them in the editor's Lyrics box **before** analysing:
+       they are given to the recogniser as a hint, which fixes most misheard words.
+     - Without the engine, notes show `•` ("keep the original sound") and you type the words yourself.
 3. **Edit.** Click **Open MIDI-Lyrics Editor**. The teal line is the original pitch. Notes are:
    - **teal**: unchanged words. These keep the original articulation and phrasing.
    - **orange**: words you changed. Double-click a note and type a new syllable. These parts
@@ -229,6 +236,7 @@ you reopen the project; if the cache is missing, VoxForge re-renders automatical
 
 - **Engine command**: where the engine is installed. Leave it empty to detect it automatically.
 - **Lyrics language**: the speech-recognition language. *auto* works for most songs.
+- **Lyrics model**: Whisper model size for lyrics extraction (tiny … large-v3).
 - **Use GPU**: train and transcribe with CUDA.
 - **Load CMU dictionary…**: improves English pronunciation (the engine installer does this for you).
 

@@ -16,7 +16,8 @@ StemAnalyzer::~StemAnalyzer()
     stopThread (10000);
 }
 
-void StemAnalyzer::start (const juce::File& stem, const VocalToMidiOptions& opts, bool transcribe, const juce::String& language)
+void StemAnalyzer::start (const juce::File& stem, const VocalToMidiOptions& opts, bool transcribe, const juce::String& language,
+                          const juce::String& lyricsHint)
 {
     cancelFlag = true;
     stopThread (10000);
@@ -24,6 +25,7 @@ void StemAnalyzer::start (const juce::File& stem, const VocalToMidiOptions& opts
     options = opts;
     doTranscribe = transcribe;
     lang = language;
+    hint = lyricsHint.trim().substring (0, 800);
     cancelFlag = false;
     resultReady = false;
     prog = 0.0f;
@@ -70,7 +72,9 @@ void StemAnalyzer::run()
                     setStatus ("Extracting lyrics (speech recognition)", 0.45f);
                     juce::StringArray args { "transcribe", "--audio", file.getFullPathName(),
                                              "--models-dir", Paths::modelsDir().getFullPathName(),
-                                             "--language", lang.isEmpty() ? juce::String ("auto") : lang };
+                                             "--language", lang.isEmpty() ? juce::String ("auto") : lang,
+                                             "--model", Settings::get().lyricsModel() };
+                    if (hint.isNotEmpty()) { args.add ("--prompt"); args.add (hint); }
                     if (Settings::get().useGpu()) args.add ("--gpu");
                     auto o = EngineClient::run (args, &cancelFlag,
                                                 [&] (float p, const juce::String& m) { setStatus ("Lyrics: " + m, 0.45f + 0.5f * p); });

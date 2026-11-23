@@ -5,7 +5,7 @@ Usage (normally launched by the plug-in):
     voxforge-engine train --voice-dir DIR --models-dir DIR [--samples a.wav b.wav ...] [--epochs N]
                           [--quality fast|standard|high] [--gpu] [--base base.pt]
     voxforge-engine train --pretrain --data-dir CORPUS --voice-dir WORKDIR --models-dir DIR --epochs N --gpu
-    voxforge-engine transcribe --audio vocal.wav [--language en|auto] [--model small] [--gpu] [--models-dir DIR]
+    voxforge-engine transcribe --audio vocal.wav [--language en|auto] [--model small] [--prompt "lyrics hint"] [--gpu]
     voxforge-engine download-base --models-dir DIR          (pretrained RVC v2 48 kHz base, ~220 MB)
     voxforge-engine export-content-encoder --models-dir DIR
 """
@@ -79,6 +79,7 @@ def main(argv=None) -> int:
     r.add_argument("--model", default="small")
     r.add_argument("--models-dir", default="")
     r.add_argument("--gpu", action="store_true")
+    r.add_argument("--prompt", default="", help="known lyrics / vocabulary hint for the recogniser")
 
     e = sub.add_parser("export-content-encoder")
     e.add_argument("--models-dir", required=True)

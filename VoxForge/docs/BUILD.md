@@ -150,7 +150,10 @@ voxforge-engine train --pretrain --data-dir D:\corpus --voice-dir D:\base-work `
 
 **CI check:** the `engine` job of the GitHub workflow downloads the real base model, fine-tunes it
 briefly on synthetic audio, exports `voice.onnx`, runs it with onnxruntime, and the Windows job then
-renders a phrase through the plug-in's C++ ONNX backend with those files.
+renders a phrase through the plug-in's C++ ONNX backend with those files. The same job tests lyrics
+extraction: a recording with known words (espeak-ng) is transcribed by Whisper through the engine,
+then through the plug-in's own C++ path (StemAnalyzer → engine process → words placed on notes).
+`VOXFORGE_ENGINE_COMMAND` overrides the engine location (used by CI).
 
 ## 3. Linux / macOS development build and tests
 

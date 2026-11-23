@@ -30,7 +30,9 @@ public:
     StemAnalyzer();
     ~StemAnalyzer() override;
 
-    void start (const juce::File& stem, const VocalToMidiOptions& opts, bool transcribe, const juce::String& language);
+    /** @param lyricsHint  known lyrics (optional) - improves recognition of sung words */
+    void start (const juce::File& stem, const VocalToMidiOptions& opts, bool transcribe, const juce::String& language,
+                const juce::String& lyricsHint = {});
     void cancel() { cancelFlag = true; }
 
     bool isRunning() const noexcept { return isThreadRunning(); }
@@ -44,7 +46,7 @@ private:
     juce::File file;
     VocalToMidiOptions options;
     bool doTranscribe = true;
-    juce::String lang;
+    juce::String lang, hint;
     std::atomic<bool> cancelFlag { false }, resultReady { false };
     std::atomic<float> prog { 0.0f };
     juce::CriticalSection lock;

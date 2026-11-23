@@ -31,6 +31,21 @@ jobs:
         run: voxforge-engine train --voice-dir work --models-dir models --samples data/take0.wav data/take1.wav data/take2.wav --epochs 2 --quality fast --max-steps-per-epoch 3 --no-download
       - name: Run the exported models with onnxruntime
         run: python VoxForge/engine/tests/check_onnx.py models/content_encoder.onnx work/voice.onnx data/take0.wav converted.wav
+      - name: Lyrics extraction - recording with known words (espeak-ng) through the engine
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng
+          espeak-ng -s 120 -w lyrics.wav "twinkle twinkle little star how I wonder what you are"
+          voxforge-engine transcribe --audio lyrics.wav --language en --model small --models-dir models | tee transcribe.jsonl
+          grep -q '"type": "result"' transcribe.jsonl
+      - name: Lyrics extraction - plug-in C++ path (StemAnalyzer -> engine -> words on notes)
+        run: |
+          sudo apt-get install -y -qq libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev mesa-common-dev ninja-build
+          cmake -S VoxForge -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DVOXFORGE_BUILD_TESTS=ON -DVOXFORGE_STANDALONE=OFF
+          cmake --build build-linux --target VoxForgeTests -j4
+          export VOXFORGE_ENGINE_COMMAND="$(which voxforge-engine)"
+          export VF_LYRICS_STEM="$PWD/lyrics.wav"
+          export VF_LYRICS_EXPECT="twinkle little star wonder what"
+          ./build-linux/VoxForgeTests_artefacts/Release/VoxForgeTests test-output-linux
       - uses: actions/upload-artifact@v4
         with:
           name: voxforge-test-models
@@ -38,6 +53,8 @@ jobs:
             models/content_encoder.onnx
             work/voice.onnx
             converted.wav
+            lyrics.wav
+            transcribe.jsonl
           retention-days: 7
 
   build:
