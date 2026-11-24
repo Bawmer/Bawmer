@@ -28,7 +28,7 @@
 |---|---|---|
 | Audio | MIDI capture, live voice, playback of the take and the stem | `AbstractFifo` of capture events; take and stem behind `SpinLock` with try-lock (never blocks); replaced takes go to a graveyard that is freed on the message thread |
 | Message | Editor, project edits, draining the capture FIFO, debounced auto-render, installing takes | Owns `VocalProject` |
-| Render | Synthesis, ONNX inference, resampling, cache | Gets a full copy of the project (`RenderRequest`); a new request cancels the running one |
+| Render | Synthesis, ONNX inference (DirectML GPU or CPU), resampling, cache | Gets a full copy of the project (`RenderRequest`); a new request cancels the running one |
 | Stem analysis | Vocal-to-MIDI, transcription | Result polled by the editor |
 | Engine job | Neural training in a separate process | JSON lines on stdout |
 

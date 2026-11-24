@@ -17,6 +17,9 @@ def transcribe(args) -> dict:
         WhisperModel = None
 
     if WhisperModel is not None:
+        if args.gpu:
+            from .gpu import add_cuda_dll_path
+            add_cuda_dll_path()
         device = "cuda" if args.gpu and _cuda() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
         P.progress(0.05, f"Loading Whisper '{model_name}' ({device})", force=True)

@@ -16,7 +16,13 @@ python3 -m venv "$VENV"
 if [[ "${1:-}" == "--cpu" ]]; then
   "$VENV/bin/python" -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 else
-  "$VENV/bin/python" -m pip install torch==2.5.1 torchaudio==2.5.1
+  CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 || true)"
+  if [[ -n "$CC" && "${CC%%.*}" -ge 12 ]]; then
+    # RTX 50 series (Blackwell) needs a CUDA 12.8 build
+    "$VENV/bin/python" -m pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+  else
+    "$VENV/bin/python" -m pip install torch==2.5.1 torchaudio==2.5.1
+  fi
 fi
 "$VENV/bin/python" -m pip install "$SRC"
 "$VENV/bin/voxforge-engine" export-content-encoder --models-dir "$MODELS"

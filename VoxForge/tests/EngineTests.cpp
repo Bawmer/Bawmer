@@ -235,6 +235,40 @@ int main (int argc, char** argv)
         juce::AudioBuffer<float> nbuf (1, (int) neural.size());
         if (! neural.empty()) nbuf.copyFrom (0, 0, neural.data(), (int) neural.size());
         writeWav (out.getChildFile ("twinkle_neural_" + juce::String ((int) voiceRate) + ".wav"), nbuf, voiceRate);
+        std::cout << "  device: " << nb.device() << "\n";
+
+        // [12] GPU inference (DirectML). CI runners have no GPU: VF_TEST_GPU=software runs the same
+        // DirectML code path on Windows' software adapter; on a PC with an RTX card use VF_TEST_GPU=1.
+        const auto gpuTest = juce::SystemStats::getEnvironmentVariable ("VF_TEST_GPU", {});
+        if (gpuTest.isNotEmpty())
+        {
+            std::cout << "[12] GPU inference (DirectML)\n";
+            NeuralBackend gpu, cpu;
+            gpu.setPreferGpu (true, gpuTest == "software");
+            cpu.setPreferGpu (false);
+            juce::String e1, e2;
+            const bool loaded = gpu.loadContentEncoder (juce::File (encPath), e1) && gpu.loadVoice (juce::File (voicePath), e1, voiceRate, voiceHop)
+                                && cpu.loadContentEncoder (juce::File (encPath), e2);
+            CHECK (loaded, "models load " + e1 + e2);
+            CHECK (gpu.usingGpu(), "models run on " + gpu.device());
+            const int n3 = juce::jmin (g16.getNumSamples(), (int) (3.0 * NeuralBackend::kContentRate));
+            std::vector<float> ug, uc; int fg = 0, dg = 0, fc = 0, dc = 0;
+            const auto tg0 = juce::Time::getMillisecondCounterHiRes();
+            const bool okG = gpu.extractUnits (g16.getReadPointer (0), n3, ug, fg, dg);
+            const auto tg = juce::Time::getMillisecondCounterHiRes() - tg0;
+            const bool okC = cpu.extractUnits (g16.getReadPointer (0), n3, uc, fc, dc);
+            double diff = 0.0, mag = 0.0;
+            for (size_t i = 0; i < juce::jmin (ug.size(), uc.size()); ++i) { diff += std::abs (ug[i] - uc[i]); mag += std::abs (uc[i]); }
+            const double rel = mag > 0 ? diff / mag : 1.0;
+            std::cout << "  GPU content units in " << tg << " ms, relative difference to CPU " << rel << "\n";
+            CHECK (okG && okC && fg == fc && dg == dc && rel < 0.02, "GPU content units match the CPU");
+            std::vector<float> f0g ((size_t) fg, 220.0f), outG;
+            const bool okS = gpu.synthesise (ug, fg, dg, f0g, outG);
+            bool finite = true; double eg = 0;
+            for (auto v : outG) { finite &= std::isfinite (v); eg += (double) v * v; }
+            CHECK (okS && (int) outG.size() == fg * voiceHop && finite && eg > 0.0,
+                   "GPU voice synthesis: " + juce::String ((int) outG.size()) + " samples");
+        }
     }
 
     // [10] Lyrics extraction through the plug-in's StemAnalyzer + engine process

@@ -18,9 +18,17 @@ CACHE_VERSION = 2              # bump when the cached features change (v2: HuBER
 
 
 def _device(use_gpu: bool) -> str:
-    import torch
-    if use_gpu and torch.cuda.is_available():
+    from . import gpu
+    g = gpu.info()
+    if use_gpu and g["available"]:
+        if not g["supported"]:
+            P.log("WARNING: " + g["message"] + " Training on the CPU instead.")
+            return "cpu"
+        gpu.configure_for_training()
+        P.log("GPU: " + g["message"])
         return "cuda"
+    if use_gpu:
+        P.log("GPU requested but not usable: " + g["message"])
     return "cpu"
 
 
@@ -168,7 +176,8 @@ def train(args) -> dict:
     epochs = int(args.epochs)
     total = max(1, (epochs - start_epoch) * steps_per_epoch)
     use_amp = device == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = (torch.amp.GradScaler("cuda", enabled=use_amp) if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler")
+              else torch.cuda.amp.GradScaler(enabled=use_amp))
     cache: dict = {}
     t0, step = time.time(), 0
     seg_frames = M.SEGMENT // M.HOP

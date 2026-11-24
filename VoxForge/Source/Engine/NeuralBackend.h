@@ -25,6 +25,11 @@ public:
     static bool isCompiledIn() noexcept;
     /** Human readable state ("ready", "content encoder missing", ...). */
     juce::String status() const;
+    /** Where inference runs: "GPU: NVIDIA GeForce RTX 4070 (12.0 GB) (DirectML)" or "CPU (...reason)". */
+    juce::String device() const;
+    bool usingGpu() const noexcept;
+    /** GPU (DirectML, Windows) is used by default when available; changing it re-opens the models. */
+    void setPreferGpu (bool shouldUseGpu, bool allowSoftwareAdapter = false);   // software adapter: tests only
 
     bool loadContentEncoder (const juce::File& onnx, juce::String& error);
     /** @param sampleRate / hop  output format of the voice (RVC v2: 48000/960, 40000/800, 32000/640) */
@@ -50,6 +55,12 @@ public:
                      std::function<void (float)> progress = nullptr);
 
 private:
+    bool extractUnitsLocked (const float* audio16k, int numSamples, std::vector<float>& units, int& frames, int& dim,
+                             std::atomic<bool>* cancel);
+    bool synthesiseLocked (const std::vector<float>& units, int frames, int dim, const std::vector<float>& f0,
+                           std::vector<float>& audioOut, std::atomic<bool>* cancel, std::function<void (float)> progress);
+    bool fallBackToCpu();
+
     struct Impl;
     std::unique_ptr<Impl> impl;
     juce::File voiceFile;

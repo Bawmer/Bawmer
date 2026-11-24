@@ -44,7 +44,8 @@ and transcribes lyrics. The plug-in launches it in the background when needed.
 2. Run `install_engine.ps1`: right-click it, choose *Run with PowerShell*, or use the
    start-menu entry *Install VoxForge Engine*. The script:
    - creates `%APPDATA%\VoxForge\engine-venv`
-   - installs PyTorch, the CUDA build if an NVIDIA GPU is found
+   - installs PyTorch. With an NVIDIA GPU it installs the CUDA build for your card:
+     CUDA 12.8 for RTX 50 series, CUDA 12.1 for RTX 20/30/40. It then runs a quick GPU test.
    - exports the shared content encoder to `%APPDATA%\VoxForge\Models\content_encoder.onnx`
    - downloads the CMU pronunciation dictionary
 3. Re-open VoxForge. Go to **Presets → Settings → Test engine**. It should report
@@ -52,6 +53,27 @@ and transcribes lyrics. The plug-in launches it in the background when needed.
 
 You can also point VoxForge at any engine in *Presets → Settings → Engine command*,
 for example `"C:\Python311\python.exe" -m voxforge_engine`.
+
+### NVIDIA RTX GPU
+
+VoxForge uses an NVIDIA GPU for everything heavy when **Presets → Settings → Use NVIDIA GPU** is
+on, which is the default:
+
+| Task | Runs on | Needs |
+|---|---|---|
+| Neural rendering in the plug-in (MIDI and vocal replacement) | GPU through **DirectML**, built into the plug-in | Only a current NVIDIA driver; no CUDA install |
+| Neural training (Voice Cloning, Voicebox, Applio import check) | GPU through **CUDA** (PyTorch) | `install_engine.ps1`, which picks the right CUDA build |
+| Lyrics extraction (Whisper) | GPU through CUDA | The same engine install |
+
+- The header badge reads **NEURAL - GPU** when renders run on the graphics card. Hover over it to
+  see which card is used.
+- On laptops with both integrated graphics and an RTX card, VoxForge picks the NVIDIA card.
+- Other DirectX 12 GPUs (AMD, Intel) also work for rendering.
+- If the GPU fails (old driver, out of video memory), VoxForge switches to the CPU, keeps
+  working, and shows the reason in *Presets → Neural playback*.
+- **RTX 50 series** needs NVIDIA driver 570 or newer. If you installed the engine before
+  updating, re-run `install_engine.ps1`: *Test engine* shows a warning when PyTorch is too old
+  for your card.
 
 Folders VoxForge uses (`%APPDATA%\VoxForge`):
 
@@ -398,7 +420,9 @@ the beat so the vowel lands on it, and final consonants close the note.
 | Vocal out of time | Capture or import from bar 1. If the DAW tempo changed, click **Use host tempo**. For replacement, check *Stem starts at beat*. |
 | "Engine not found" | Run `install_engine.ps1`, or set *Presets → Settings → Engine command*, then click **Test engine**. |
 | Lyrics extraction failed | Install faster-whisper (the engine installer does this). The first run downloads the Whisper model, so it needs internet once; after that it works offline. Choose the language in Settings if detection fails. |
-| Training very slow | Use an NVIDIA GPU with *Use GPU* on, or the *Fast* quality level. On CPU only, use Lite clones. |
+| Training very slow | Turn on *Use NVIDIA GPU* and check that *Test engine* names your card. Otherwise use the *Fast* quality level, or Lite clones on a CPU-only PC. |
+| Badge shows NEURAL but not GPU | Update the NVIDIA driver. *Presets → Neural playback* shows why the CPU is used (for example "no DirectX 12 GPU found" or a DirectML error). |
+| "newer than this PyTorch build supports" | RTX 50 series with an old engine install: update the driver to 570+ and re-run `install_engine.ps1`. |
 | Neural badge missing | The voice needs `voice.onnx`, the build needs the neural backend, and `Models\content_encoder.onnx` must exist. The Presets status lines show which one is missing. |
 | Voicebox guide unavailable / cannot connect | Start the Voicebox app and check the address in *Presets → Settings → Voicebox* (default `http://127.0.0.1:17493`). Click **Connect** to test it. |
 | Wrong pronunciation | Load the CMU dictionary, split syllables with `-`, or type phonemes for that note. |

@@ -82,6 +82,30 @@ jobs:
             transcribe.jsonl
           retention-days: 7
 
+  engine-torch27:
+    # RTX 50 series (Blackwell) users get PyTorch 2.7.1 (CUDA 12.8) from install_engine.ps1:
+    # check the engine end to end with that PyTorch version (CPU build here, no GPU on the runner)
+    name: Neural engine on PyTorch 2.7.1 (RTX 50 series build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install engine with PyTorch 2.7.1
+        run: |
+          pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install ./VoxForge/engine
+          voxforge-engine check --models-dir models
+      - name: Fine-tune, export, run with onnxruntime, import an Applio model
+        run: |
+          python VoxForge/engine/tests/make_synthetic_singing.py data
+          voxforge-engine download-base --models-dir models
+          voxforge-engine train --voice-dir work --models-dir models --samples data/take0.wav data/take1.wav --epochs 1 --quality fast --max-steps-per-epoch 2 --no-download
+          python VoxForge/engine/tests/check_onnx.py models/content_encoder.onnx work/voice.onnx data/take0.wav converted.wav
+          python VoxForge/engine/tests/make_applio_models.py work/checkpoints/latest.pt .
+          voxforge-engine import-model --model applio40k.pth --out imported/applio40k.onnx
+
   build:
     needs: engine
     # still build and test the plug-in if the engine job failed (e.g. a model host is down);
@@ -90,14 +114,18 @@ jobs:
     runs-on: windows-2022
     env:
       ORT_VERSION: "1.20.1"
+      DML_VERSION: "1.15.2"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download ONNX Runtime (official NuGet package)
+      - name: Download ONNX Runtime with DirectML (GPU) - official NuGet packages
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/$env:ORT_VERSION" -OutFile ort.zip
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/$env:ORT_VERSION" -OutFile ort.zip
           Expand-Archive ort.zip -DestinationPath ort
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/$env:DML_VERSION" -OutFile dml.zip
+          Expand-Archive dml.zip -DestinationPath dml
+          Copy-Item dml\bin\x64-win\DirectML.dll ort\runtimes\win-x64\native\
           Get-ChildItem ort\build\native\include, ort\runtimes\win-x64\native | Select-Object -ExpandProperty FullName
           "ORT_ROOT=$pwd\ort" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -132,6 +160,7 @@ jobs:
             $env:VF_VOICEBOX_URL = "http://127.0.0.1:17493"
           }
           $env:VOXFORGE_DATA_DIR = "$pwd\vfdata48"
+          $env:VF_TEST_GPU = "software"     # no GPU on the runner: DirectML on the software adapter
           & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Test-Path test-models\imported\applio40k.onnx) {
@@ -139,6 +168,7 @@ jobs:
             $env:VF_VOICE_MODEL = (Resolve-Path test-models\imported\applio40k.onnx).Path
             $env:VF_VOICE_RATE = "40000"; $env:VF_VOICE_HOP = "800"
             $env:VOXFORGE_DATA_DIR = "$pwd\vfdata40"
+            $env:VF_TEST_GPU = ""
             & build\VoxForgeTests_artefacts\Release\VoxForgeTests.exe build\test-output-40k
             exit $LASTEXITCODE
           }

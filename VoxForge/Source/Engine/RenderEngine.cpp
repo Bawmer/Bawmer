@@ -71,6 +71,7 @@ juce::String RenderEngine::neuralStatus()
 bool RenderEngine::prepareNeural (const VoiceModel& v)
 {
     if (! NeuralBackend::isCompiledIn() || ! v.isNeural()) return false;
+    backend.setPreferGpu (Settings::get().useGpu());
     juce::String err;
     if (! backend.hasContentEncoder() && ! backend.loadContentEncoder (Paths::contentEncoder(), err))
     {

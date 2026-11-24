@@ -115,7 +115,9 @@ void VoxForgeEditor::timerCallback()
         refreshVoiceBox();
 
     const bool neural = proc.currentVoice().isNeural() && vf::NeuralBackend::isCompiledIn();
-    engineBadge.setText (neural ? "NEURAL" : "DSP ENGINE", juce::dontSendNotification);
+    const bool gpu = neural && proc.renderer().neural().usingGpu();
+    engineBadge.setText (neural ? (gpu ? "NEURAL - GPU" : "NEURAL") : "DSP ENGINE", juce::dontSendNotification);
+    engineBadge.setTooltip (neural ? "Neural rendering on " + proc.renderer().neural().device() : juce::String());
     engineBadge.setColour (juce::Label::backgroundColourId, neural ? C::accent : C::panel2);
     engineBadge.setColour (juce::Label::textColourId, C::text);
 

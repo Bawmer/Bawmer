@@ -41,16 +41,20 @@ def _check(args) -> dict:
             info[mod] = None
             missing.append(mod)
     cuda = False
+    gpu_msg = "none"
     if info.get("torch"):
-        import torch
-        cuda = torch.cuda.is_available()
-        info["cuda_device"] = torch.cuda.get_device_name(0) if cuda else None
+        from . import gpu
+        g = gpu.info()
+        cuda = g["available"] and g["supported"]
+        info["cuda_device"] = g["name"]
+        info["gpu"] = g
+        gpu_msg = g["message"] if g["available"] else "none"
     enc = os.path.join(args.models_dir, "content_encoder.onnx") if args.models_dir else ""
     base_dir = os.path.join(args.models_dir, "base") if args.models_dir else ""
     has_base = bool(base_dir) and (os.path.exists(os.path.join(base_dir, "base.pt"))
                                    or os.path.exists(os.path.join(base_dir, "f0G48k.pth")))
     summary = (f"VoxForge Engine {__version__}, Python {platform.python_version()}, "
-               f"GPU: {info.get('cuda_device') or 'none'}, "
+               f"GPU: {gpu_msg}, "
                f"content encoder: {_enc_state(enc)}, "
                f"base model: {'yes' if has_base else 'no (downloaded on first training)'}"
                + (f", missing: {', '.join(missing)}" if missing else ""))

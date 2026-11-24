@@ -170,6 +170,9 @@ PresetsTab::PresetsTab (VoxForgeProcessor& p) : proc (p)
         Settings::get().props().saveIfNeeded();
     };
     addAndMakeVisible (lyricsModelBox);
+    gpuToggle.setTooltip ("RTX / NVIDIA GPU: neural training and lyrics extraction use CUDA (engine), "
+                          "neural rendering in the plug-in uses DirectML (no CUDA install needed). "
+                          "Other DirectX 12 GPUs also work for rendering.");
     gpuToggle.setToggleState (Settings::get().useGpu(), juce::dontSendNotification);
     gpuToggle.onClick = [this]
     {

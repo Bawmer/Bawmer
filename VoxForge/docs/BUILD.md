@@ -43,7 +43,7 @@ cmake --build build --config Release --parallel
 
 | CMake option | Default | Meaning |
 |---|---|---|
-| `VOXFORGE_WITH_ONNX` | OFF | Neural voice playback through ONNX Runtime |
+| `VOXFORGE_WITH_ONNX` | OFF | Neural voice playback through ONNX Runtime (DirectML package = GPU) |
 | `ONNXRUNTIME_ROOT` | – | ORT package root (`include/`, `lib/`). NuGet layouts (`build/native/include`, `runtimes/win-x64/native`) also work |
 | `VOXFORGE_BUILD_TESTS` | OFF | `VoxForgeTests`, `VoxForgeHostTest` and `VoxForgeUiSnapshot` |
 | `VOXFORGE_STANDALONE` | ON | Also build the standalone app |
@@ -58,6 +58,14 @@ Outputs:
 Notes on the Windows build:
 
 - **Static CRT** (`/MT`): no VC++ redistributable is needed.
+- **GPU rendering (DirectML).** The script and CI use the `Microsoft.ML.OnnxRuntime.DirectML`
+  package and copy `DirectML.dll` (from `Microsoft.AI.DirectML` 1.15.2) next to `onnxruntime.dll`.
+  The plug-in enumerates the DXGI adapters and picks the NVIDIA card first, then the discrete GPU
+  with the most VRAM. It looks up `OrtSessionOptionsAppendExecutionProvider_DML` at runtime, so a
+  build against the CPU package still works, on the CPU only. Any GPU error re-opens the models on
+  the CPU. `VOXFORGE_GPU=0` disables the GPU. CI runs the DirectML path on the runner's software
+  adapter (test [12], `VF_TEST_GPU=software`) and compares the result with the CPU. On a PC with an
+  RTX card, `VF_TEST_GPU=1` tests the real GPU.
 - **ONNX Runtime is delay-loaded.** At first use the plug-in loads `onnxruntime.dll` from its
   own folder by full path. This matters because Windows ships an old `onnxruntime.dll` in
   `System32`, and hosts do not search plug-in folders. The ORT C++ API is initialised by hand

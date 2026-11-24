@@ -11,6 +11,7 @@
    #define WIN32_LEAN_AND_MEAN
   #endif
   #include <windows.h>
+  #include <dxgi.h>
  #endif
  #include <array>
 #endif
@@ -34,6 +35,10 @@ namespace
 
        #if JUCE_WINDOWS
         const auto self = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+        // DirectML build: onnxruntime.dll needs a recent DirectML.dll; System32 has an older one
+        const auto dml = self.getSiblingFile ("DirectML.dll");
+        if (dml.existsAsFile())
+            LoadLibraryExW (dml.getFullPathName().toWideCharPointer(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         const auto dll = self.getSiblingFile ("onnxruntime.dll");
         if (dll.existsAsFile())
         {
@@ -66,14 +71,62 @@ namespace
         error = err;
         return ok;
     }
+
+#if JUCE_WINDOWS
+    /** GPU for DirectML: NVIDIA first (RTX), then the hardware adapter with the most VRAM.
+        Index = position in IDXGIFactory1::EnumAdapters1 order, which is what the DML provider uses. */
+    struct GpuChoice { int index = -1; juce::String name; juce::int64 vramMB = 0; };
+
+    GpuChoice chooseGpu (bool allowSoftware)
+    {
+        GpuChoice best;
+        HMODULE dxgi = LoadLibraryW (L"dxgi.dll");
+        if (dxgi == nullptr) return best;
+        using CreateFn = HRESULT (WINAPI*) (REFIID, void**);
+        auto create = reinterpret_cast<CreateFn> (GetProcAddress (dxgi, "CreateDXGIFactory1"));
+        IDXGIFactory1* factory = nullptr;
+        if (create == nullptr || FAILED (create (__uuidof (IDXGIFactory1), reinterpret_cast<void**> (&factory))))
+            return best;
+        int bestScore = -1;
+        for (UINT i = 0;; ++i)
+        {
+            IDXGIAdapter1* a = nullptr;
+            if (factory->EnumAdapters1 (i, &a) == DXGI_ERROR_NOT_FOUND) break;
+            DXGI_ADAPTER_DESC1 d {};
+            if (SUCCEEDED (a->GetDesc1 (&d)))
+            {
+                const bool software = (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0 || d.VendorId == 0x1414;
+                const auto mb = (juce::int64) (d.DedicatedVideoMemory / (1024 * 1024));
+                if (! software || allowSoftware)
+                {
+                    // NVIDIA > other discrete (>= 1 GB VRAM) > integrated > software
+                    const int score = (d.VendorId == 0x10DE ? 3000000 : (mb >= 1024 ? 2000000 : (software ? 0 : 1000000)))
+                                      + (int) std::min<juce::int64> (mb, 999999);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = { (int) i, juce::String (d.Description).trim(), mb };
+                    }
+                }
+            }
+            a->Release();
+        }
+        factory->Release();
+        return best;
+    }
+#endif
 }
 
 struct NeuralBackend::Impl
 {
     std::unique_ptr<Ort::Env> env;
     std::unique_ptr<Ort::Session> content, voice;
-    std::unique_ptr<Ort::SessionOptions> options;   // created only after the ORT API is initialised
+    std::unique_ptr<Ort::SessionOptions> options;      // CPU; created only after the ORT API is initialised
+    std::unique_ptr<Ort::SessionOptions> gpuOptions;   // DirectML on the chosen GPU (Windows, DirectML build)
     std::string contentIn, contentOut, voiceUnits, voiceF0, voiceOut;
+    bool preferGpu = true, allowSoftware = false, contentOnGpu = false, voiceOnGpu = false;
+    juce::String gpuName, gpuNote;
+    juce::File contentFile;
 
     bool init (juce::String& error)
     {
@@ -83,18 +136,67 @@ struct NeuralBackend::Impl
         options = std::make_unique<Ort::SessionOptions>();
         options->SetIntraOpNumThreads (juce::jmax (1, juce::SystemStats::getNumPhysicalCpus() - 1));
         options->SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
+        if (preferGpu) createGpuOptions();
         return true;
     }
 
-    std::unique_ptr<Ort::Session> open (const juce::File& f, juce::String& error)
+    /** VOXFORGE_GPU=0 disables the GPU, =force also accepts a software adapter (CI). */
+    void createGpuOptions()
     {
+        gpuOptions.reset();
+        gpuName.clear();
+        const auto gpuEnv = juce::SystemStats::getEnvironmentVariable ("VOXFORGE_GPU", {}).toLowerCase();
+        if (gpuEnv == "0" || gpuEnv == "off") { gpuNote = "GPU disabled (VOXFORGE_GPU=0)"; return; }
+       #if JUCE_WINDOWS
+        using AppendDml = OrtStatus* (ORT_API_CALL*) (OrtSessionOptions*, int);
+        HMODULE ort = GetModuleHandleW (L"onnxruntime.dll");
+        auto append = ort != nullptr ? reinterpret_cast<AppendDml> (GetProcAddress (ort, "OrtSessionOptionsAppendExecutionProvider_DML")) : nullptr;
+        if (append == nullptr) { gpuNote = "this build of ONNX Runtime has no DirectML (CPU only)"; return; }
+        const auto gpu = chooseGpu (allowSoftware || gpuEnv == "force");
+        if (gpu.index < 0) { gpuNote = "no DirectX 12 GPU found"; return; }
         try
         {
-           #if JUCE_WINDOWS
-            return std::make_unique<Ort::Session> (*env, f.getFullPathName().toWideCharPointer(), *options);
-           #else
-            return std::make_unique<Ort::Session> (*env, f.getFullPathName().toRawUTF8(), *options);
-           #endif
+            auto o = std::make_unique<Ort::SessionOptions>();
+            o->SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
+            o->DisableMemPattern();                              // required by the DirectML provider
+            o->SetExecutionMode (ExecutionMode::ORT_SEQUENTIAL);
+            if (OrtStatus* st = append (*o, gpu.index))
+            {
+                gpuNote = juce::String ("DirectML unavailable: ") + Ort::GetApi().GetErrorMessage (st);
+                Ort::GetApi().ReleaseStatus (st);
+                return;
+            }
+            gpuOptions = std::move (o);
+            gpuName = gpu.name + (gpu.vramMB > 0 ? " (" + juce::String (gpu.vramMB / 1024.0, 1) + " GB)" : juce::String());
+            gpuNote.clear();
+        }
+        catch (const Ort::Exception& e) { gpuNote = juce::String ("DirectML unavailable: ") + e.what(); }
+       #else
+        gpuNote = "GPU rendering is available in the Windows build (DirectML)";
+       #endif
+    }
+
+    std::unique_ptr<Ort::Session> openWith (const juce::File& f, Ort::SessionOptions& o)
+    {
+       #if JUCE_WINDOWS
+        return std::make_unique<Ort::Session> (*env, f.getFullPathName().toWideCharPointer(), o);
+       #else
+        return std::make_unique<Ort::Session> (*env, f.getFullPathName().toRawUTF8(), o);
+       #endif
+    }
+
+    /** GPU first; any failure there falls back to the CPU. */
+    std::unique_ptr<Ort::Session> open (const juce::File& f, juce::String& error, bool& onGpu)
+    {
+        onGpu = false;
+        if (gpuOptions != nullptr)
+        {
+            try { auto s = openWith (f, *gpuOptions); onGpu = true; return s; }
+            catch (const Ort::Exception& e) { gpuNote = juce::String ("GPU session failed, using CPU: ") + e.what(); }
+        }
+        try
+        {
+            return openWith (f, *options);
         }
         catch (const Ort::Exception& e)
         {
@@ -120,8 +222,11 @@ bool NeuralBackend::loadContentEncoder (const juce::File& f, juce::String& error
     const juce::ScopedLock sl (lock);
     if (! f.existsAsFile()) { error = "Content encoder not found: " + f.getFullPathName(); lastError = error; return false; }
     if (! impl->init (error)) { lastError = error; return false; }
-    auto s = impl->open (f, error);
+    bool gpu = false;
+    auto s = impl->open (f, error, gpu);
     if (s == nullptr) { lastError = error; return false; }
+    impl->contentOnGpu = gpu;
+    impl->contentFile = f;
     impl->contentIn = Impl::name (*s, true, 0);
     impl->contentOut = Impl::name (*s, false, 0);
     impl->content = std::move (s);
@@ -136,8 +241,10 @@ bool NeuralBackend::loadVoice (const juce::File& f, juce::String& error, double 
     if (f == voiceFile && impl->voice != nullptr) return true;
     if (! f.existsAsFile()) { error = "Voice model not found: " + f.getFullPathName(); lastError = error; return false; }
     if (! impl->init (error)) { lastError = error; return false; }
-    auto s = impl->open (f, error);
+    bool gpu = false;
+    auto s = impl->open (f, error, gpu);
     if (s == nullptr) { lastError = error; return false; }
+    impl->voiceOnGpu = gpu;
     if (s->GetInputCount() < 2) { error = "voice.onnx must have inputs (units, f0)."; lastError = error; return false; }
     impl->voiceUnits = Impl::name (*s, true, 0);
     impl->voiceF0 = Impl::name (*s, true, 1);
@@ -154,13 +261,61 @@ juce::String NeuralBackend::status() const
 {
     if (lastError.isNotEmpty() && impl->env == nullptr) return lastError;
     if (! hasContentEncoder()) return "content encoder missing";
-    return hasVoice() ? "ready" : "no neural voice loaded";
+    return (hasVoice() ? "ready" : "no neural voice loaded") + juce::String (" - ") + device();
+}
+
+juce::String NeuralBackend::device() const
+{
+    if (impl->env == nullptr) return impl->preferGpu ? "GPU (when available)" : "CPU";
+    const bool gpu = impl->contentOnGpu || impl->voiceOnGpu;
+    if (gpu) return "GPU: " + impl->gpuName + " (DirectML)";
+    return impl->preferGpu && impl->gpuNote.isNotEmpty() ? "CPU (" + impl->gpuNote + ")" : juce::String ("CPU");
+}
+
+bool NeuralBackend::usingGpu() const noexcept { return impl->contentOnGpu || impl->voiceOnGpu; }
+
+void NeuralBackend::setPreferGpu (bool shouldUseGpu, bool allowSoftwareAdapter)
+{
+    const juce::ScopedLock sl (lock);
+    if (impl->preferGpu == shouldUseGpu && impl->allowSoftware == allowSoftwareAdapter) return;
+    impl->preferGpu = shouldUseGpu;
+    impl->allowSoftware = allowSoftwareAdapter;
+    if (impl->env == nullptr) return;
+    // re-open the models on the new device on next use
+    impl->content.reset(); impl->voice.reset();
+    impl->contentOnGpu = impl->voiceOnGpu = false;
+    voiceFile = juce::File();
+    if (shouldUseGpu) impl->createGpuOptions();
+    else { impl->gpuOptions.reset(); impl->gpuNote = "GPU off in settings"; }
+}
+
+bool NeuralBackend::fallBackToCpu()
+{
+    // a DirectML inference error (driver reset, out of VRAM ...): re-open both models on the CPU
+    if (! usingGpu()) return false;
+    impl->gpuNote = "GPU error (" + lastError.substring (0, 120) + "), switched to CPU";
+    impl->gpuOptions.reset();
+    juce::String err;
+    bool gpu = false;
+    if (impl->contentOnGpu && impl->contentFile.existsAsFile())
+        if (auto s = impl->open (impl->contentFile, err, gpu)) { impl->content = std::move (s); impl->contentOnGpu = false; }
+    if (impl->voiceOnGpu && voiceFile.existsAsFile())
+        if (auto s = impl->open (voiceFile, err, gpu)) { impl->voice = std::move (s); impl->voiceOnGpu = false; }
+    return ! usingGpu();
 }
 
 bool NeuralBackend::extractUnits (const float* audio, int numSamples, std::vector<float>& units, int& frames, int& dim,
                                   std::atomic<bool>* cancel)
 {
     const juce::ScopedLock sl (lock);
+    if (extractUnitsLocked (audio, numSamples, units, frames, dim, cancel)) return true;
+    if (cancel != nullptr && cancel->load()) return false;
+    return fallBackToCpu() && extractUnitsLocked (audio, numSamples, units, frames, dim, cancel);
+}
+
+bool NeuralBackend::extractUnitsLocked (const float* audio, int numSamples, std::vector<float>& units, int& frames, int& dim,
+                                        std::atomic<bool>* cancel)
+{
     if (impl->content == nullptr) return false;
     units.clear(); frames = 0; dim = 0;
 
@@ -210,6 +365,15 @@ bool NeuralBackend::synthesise (const std::vector<float>& units, int frames, int
                                 std::function<void (float)> progress)
 {
     const juce::ScopedLock sl (lock);
+    if (synthesiseLocked (units, frames, dim, f0, audioOut, cancel, progress)) return true;
+    if (cancel != nullptr && cancel->load()) return false;
+    return fallBackToCpu() && synthesiseLocked (units, frames, dim, f0, audioOut, cancel, progress);
+}
+
+bool NeuralBackend::synthesiseLocked (const std::vector<float>& units, int frames, int dim, const std::vector<float>& f0,
+                                      std::vector<float>& audioOut, std::atomic<bool>* cancel,
+                                      std::function<void (float)> progress)
+{
     if (impl->voice == nullptr || frames <= 0) return false;
     audioOut.assign ((size_t) frames * voiceHop, 0.0f);
 
@@ -272,6 +436,13 @@ NeuralBackend::NeuralBackend() : impl (std::make_unique<Impl>()) {}
 NeuralBackend::~NeuralBackend() = default;
 bool NeuralBackend::isCompiledIn() noexcept { return false; }
 juce::String NeuralBackend::status() const { return "neural engine not compiled in (DSP engine active)"; }
+juce::String NeuralBackend::device() const { return "none"; }
+bool NeuralBackend::usingGpu() const noexcept { return false; }
+void NeuralBackend::setPreferGpu (bool, bool) {}
+bool NeuralBackend::fallBackToCpu() { return false; }
+bool NeuralBackend::extractUnitsLocked (const float*, int, std::vector<float>&, int&, int&, std::atomic<bool>*) { return false; }
+bool NeuralBackend::synthesiseLocked (const std::vector<float>&, int, int, const std::vector<float>&, std::vector<float>&,
+                                      std::atomic<bool>*, std::function<void (float)>) { return false; }
 bool NeuralBackend::loadContentEncoder (const juce::File&, juce::String& e) { e = status(); return false; }
 bool NeuralBackend::loadVoice (const juce::File&, juce::String& e, double, int) { e = status(); return false; }
 bool NeuralBackend::hasContentEncoder() const noexcept { return false; }

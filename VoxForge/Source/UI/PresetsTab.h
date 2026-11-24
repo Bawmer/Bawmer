@@ -42,7 +42,7 @@ private:
     juce::Label engineLabel, langLabel, statusLabel;
     juce::TextEditor engineEditor;
     juce::ComboBox langBox, lyricsModelBox;
-    juce::ToggleButton gpuToggle { "Use GPU (CUDA) for training / transcription" };
+    juce::ToggleButton gpuToggle { "Use NVIDIA GPU (training, lyrics, rendering)" };
     juce::Label voiceboxLabel;
     juce::TextEditor voiceboxUrlEditor;
     juce::TextButton voiceboxConnectBtn { "Connect" };
