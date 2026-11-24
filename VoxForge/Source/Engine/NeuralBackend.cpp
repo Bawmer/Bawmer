@@ -11,7 +11,12 @@
    #define WIN32_LEAN_AND_MEAN
   #endif
   #include <windows.h>
-  #include <dxgi.h>
+  #include <dxgi1_4.h>
+  #include <d3d12.h>
+  #if __has_include(<dml_provider_factory.h>)
+   #include <dml_provider_factory.h>      // OrtDmlApi, IDMLDevice (DirectML package of ONNX Runtime)
+   #define VOXFORGE_HAS_DML 1
+  #endif
  #endif
  #include <array>
 #endif
@@ -73,9 +78,11 @@ namespace
     }
 
 #if JUCE_WINDOWS
+    template <typename T> void releaseCom (T*& p) { if (p != nullptr) { p->Release(); p = nullptr; } }
+
     /** GPU for DirectML: NVIDIA first (RTX), then the hardware adapter with the most VRAM.
-        Index = position in IDXGIFactory1::EnumAdapters1 order, which is what the DML provider uses. */
-    struct GpuChoice { int index = -1; juce::String name; juce::int64 vramMB = 0; };
+        allowSoftware (tests only) falls back to the WARP software rasteriser. */
+    struct GpuChoice { IDXGIAdapter1* adapter = nullptr; juce::String name; juce::int64 vramMB = 0; };
 
     GpuChoice chooseGpu (bool allowSoftware)
     {
@@ -93,32 +100,69 @@ namespace
             IDXGIAdapter1* a = nullptr;
             if (factory->EnumAdapters1 (i, &a) == DXGI_ERROR_NOT_FOUND) break;
             DXGI_ADAPTER_DESC1 d {};
+            bool keep = false;
             if (SUCCEEDED (a->GetDesc1 (&d)))
             {
                 const bool software = (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0 || d.VendorId == 0x1414;
                 const auto mb = (juce::int64) (d.DedicatedVideoMemory / (1024 * 1024));
-                if (! software || allowSoftware)
+                if (! software)
                 {
-                    // NVIDIA > other discrete (>= 1 GB VRAM) > integrated > software
-                    const int score = (d.VendorId == 0x10DE ? 3000000 : (mb >= 1024 ? 2000000 : (software ? 0 : 1000000)))
+                    // NVIDIA > other discrete (>= 1 GB VRAM) > integrated
+                    const int score = (d.VendorId == 0x10DE ? 3000000 : (mb >= 1024 ? 2000000 : 1000000))
                                       + (int) std::min<juce::int64> (mb, 999999);
                     if (score > bestScore)
                     {
                         bestScore = score;
-                        best = { (int) i, juce::String (d.Description).trim(), mb };
+                        releaseCom (best.adapter);
+                        best = { a, juce::String (d.Description).trim(), mb };
+                        keep = true;
                     }
                 }
             }
-            a->Release();
+            if (! keep) a->Release();
+        }
+        if (best.adapter == nullptr && allowSoftware)
+        {
+            IDXGIFactory4* f4 = nullptr;
+            if (SUCCEEDED (factory->QueryInterface (__uuidof (IDXGIFactory4), reinterpret_cast<void**> (&f4))))
+            {
+                IDXGIAdapter1* warp = nullptr;
+                if (SUCCEEDED (f4->EnumWarpAdapter (__uuidof (IDXGIAdapter1), reinterpret_cast<void**> (&warp))))
+                    best = { warp, "Microsoft WARP (software)", 0 };
+                f4->Release();
+            }
         }
         factory->Release();
         return best;
     }
+
+    /** Our own D3D12 + DirectML devices on exactly the chosen adapter (ORT's device_id numbering
+        differs from DXGI's on multi-GPU laptops, so it is not used). */
+    struct DmlContext
+    {
+        ID3D12Device* d3d = nullptr;
+        ID3D12CommandQueue* queue = nullptr;
+       #if VOXFORGE_HAS_DML
+        IDMLDevice* dml = nullptr;
+       #endif
+        ~DmlContext() { reset(); }
+        void reset()
+        {
+           #if VOXFORGE_HAS_DML
+            releaseCom (dml);
+           #endif
+            releaseCom (queue);
+            releaseCom (d3d);
+        }
+    };
 #endif
 }
 
 struct NeuralBackend::Impl
 {
+   #if JUCE_WINDOWS
+    DmlContext dmlContext;                             // declared first: outlives the sessions using it
+   #endif
     std::unique_ptr<Ort::Env> env;
     std::unique_ptr<Ort::Session> content, voice;
     std::unique_ptr<Ort::SessionOptions> options;      // CPU; created only after the ORT API is initialised
@@ -147,30 +191,60 @@ struct NeuralBackend::Impl
         gpuName.clear();
         const auto gpuEnv = juce::SystemStats::getEnvironmentVariable ("VOXFORGE_GPU", {}).toLowerCase();
         if (gpuEnv == "0" || gpuEnv == "off") { gpuNote = "GPU disabled (VOXFORGE_GPU=0)"; return; }
-       #if JUCE_WINDOWS
-        using AppendDml = OrtStatus* (ORT_API_CALL*) (OrtSessionOptions*, int);
-        HMODULE ort = GetModuleHandleW (L"onnxruntime.dll");
-        auto append = ort != nullptr ? reinterpret_cast<AppendDml> (GetProcAddress (ort, "OrtSessionOptionsAppendExecutionProvider_DML")) : nullptr;
-        if (append == nullptr) { gpuNote = "this build of ONNX Runtime has no DirectML (CPU only)"; return; }
-        const auto gpu = chooseGpu (allowSoftware || gpuEnv == "force");
-        if (gpu.index < 0) { gpuNote = "no DirectX 12 GPU found"; return; }
+       #if JUCE_WINDOWS && VOXFORGE_HAS_DML
+        const OrtDmlApi* dmlApi = nullptr;
+        if (OrtStatus* st = Ort::GetApi().GetExecutionProviderApi ("DML", ORT_API_VERSION, reinterpret_cast<const void**> (&dmlApi)))
+        {
+            Ort::GetApi().ReleaseStatus (st);
+            dmlApi = nullptr;
+        }
+        if (dmlApi == nullptr) { gpuNote = "this build of ONNX Runtime has no DirectML (CPU only)"; return; }
+
+        auto gpu = chooseGpu (allowSoftware || gpuEnv == "force");
+        if (gpu.adapter == nullptr) { gpuNote = "no DirectX 12 GPU found"; return; }
+        auto fail = [&] (const juce::String& why) { gpuNote = why; dmlContext.reset(); releaseCom (gpu.adapter); };
+
+        dmlContext.reset();
+        HMODULE d3d12 = LoadLibraryW (L"d3d12.dll");
+        auto createDevice = d3d12 != nullptr ? reinterpret_cast<PFN_D3D12_CREATE_DEVICE> (GetProcAddress (d3d12, "D3D12CreateDevice")) : nullptr;
+        if (createDevice == nullptr
+            || FAILED (createDevice (gpu.adapter, D3D_FEATURE_LEVEL_11_0, __uuidof (ID3D12Device), reinterpret_cast<void**> (&dmlContext.d3d))))
+            return fail ("DirectX 12 device could not be created on " + gpu.name);
+        D3D12_COMMAND_QUEUE_DESC qd {};
+        qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        qd.Flags = D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT;
+        if (FAILED (dmlContext.d3d->CreateCommandQueue (&qd, __uuidof (ID3D12CommandQueue), reinterpret_cast<void**> (&dmlContext.queue))))
+            return fail ("DirectX 12 command queue failed on " + gpu.name);
+
+        // DMLCreateDevice from the DirectML.dll loaded next to the plug-in (System32's is too old)
+        HMODULE dmlDll = GetModuleHandleW (L"DirectML.dll");
+        if (dmlDll == nullptr) dmlDll = LoadLibraryW (L"DirectML.dll");
+        using DmlCreateFn = HRESULT (WINAPI*) (ID3D12Device*, DML_CREATE_DEVICE_FLAGS, REFIID, void**);
+        auto dmlCreate = dmlDll != nullptr ? reinterpret_cast<DmlCreateFn> (GetProcAddress (dmlDll, "DMLCreateDevice")) : nullptr;
+        if (dmlCreate == nullptr
+            || FAILED (dmlCreate (dmlContext.d3d, DML_CREATE_DEVICE_FLAG_NONE, __uuidof (IDMLDevice), reinterpret_cast<void**> (&dmlContext.dml))))
+            return fail ("DirectML device could not be created (DirectML.dll missing or too old)");
+
         try
         {
             auto o = std::make_unique<Ort::SessionOptions>();
             o->SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
             o->DisableMemPattern();                              // required by the DirectML provider
             o->SetExecutionMode (ExecutionMode::ORT_SEQUENTIAL);
-            if (OrtStatus* st = append (*o, gpu.index))
+            if (OrtStatus* st = dmlApi->SessionOptionsAppendExecutionProvider_DML1 (*o, dmlContext.dml, dmlContext.queue))
             {
-                gpuNote = juce::String ("DirectML unavailable: ") + Ort::GetApi().GetErrorMessage (st);
+                const juce::String msg = Ort::GetApi().GetErrorMessage (st);
                 Ort::GetApi().ReleaseStatus (st);
-                return;
+                return fail ("DirectML unavailable: " + msg);
             }
             gpuOptions = std::move (o);
             gpuName = gpu.name + (gpu.vramMB > 0 ? " (" + juce::String (gpu.vramMB / 1024.0, 1) + " GB)" : juce::String());
             gpuNote.clear();
         }
-        catch (const Ort::Exception& e) { gpuNote = juce::String ("DirectML unavailable: ") + e.what(); }
+        catch (const Ort::Exception& e) { fail (juce::String ("DirectML unavailable: ") + e.what()); }
+        releaseCom (gpu.adapter);
+       #elif JUCE_WINDOWS
+        gpuNote = "this build of ONNX Runtime has no DirectML (CPU only)";
        #else
         gpuNote = "GPU rendering is available in the Windows build (DirectML)";
        #endif

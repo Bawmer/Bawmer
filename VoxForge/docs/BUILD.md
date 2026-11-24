@@ -61,9 +61,12 @@ Notes on the Windows build:
 - **GPU rendering (DirectML).** The script and CI use the `Microsoft.ML.OnnxRuntime.DirectML`
   package and copy `DirectML.dll` (from `Microsoft.AI.DirectML` 1.15.2) next to `onnxruntime.dll`.
   The plug-in enumerates the DXGI adapters and picks the NVIDIA card first, then the discrete GPU
-  with the most VRAM. It looks up `OrtSessionOptionsAppendExecutionProvider_DML` at runtime, so a
-  build against the CPU package still works, on the CPU only. Any GPU error re-opens the models on
-  the CPU. `VOXFORGE_GPU=0` disables the GPU. CI runs the DirectML path on the runner's software
+  with the most VRAM. It creates its own Direct3D 12 device and DirectML device on exactly that
+  adapter and passes them to ONNX Runtime (`OrtDmlApi::SessionOptionsAppendExecutionProvider_DML1`).
+  ORT's own `device_id` numbering differs from DXGI's on multi-GPU laptops, so it isn't used. The
+  DML API is looked up at runtime (`GetExecutionProviderApi("DML")`), so a build against the CPU
+  package still works, on the CPU only. Any GPU error re-opens the models on
+  the CPU. `VOXFORGE_GPU=0` disables the GPU. CI runs the DirectML path on the runner's WARP software
   adapter (test [12], `VF_TEST_GPU=software`) and compares the result with the CPU. On a PC with an
   RTX card, `VF_TEST_GPU=1` tests the real GPU.
 - **ONNX Runtime is delay-loaded.** At first use the plug-in loads `onnxruntime.dll` from its
