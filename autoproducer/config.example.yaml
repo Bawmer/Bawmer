@@ -1,0 +1,62 @@
+# AutoProducer config. Copy to config.yaml and fill in every TODO.
+# Paths: use forward slashes or quoted Windows paths ("C:\\Samples").
+
+song_name: "untitled"            # used for <song_name>_v###.als and file names
+os: windows                       # windows | macos
+seed: 42                          # every random choice derives from this
+
+genre: house                      # house | techno | dnb | trap | pop | lofi
+subgenre: ""
+reference_tracks: []              # style notes only, e.g. ["Artist - Title"]; never sampled
+bpm: auto                         # number or "auto"
+key: auto                         # e.g. "A minor", "F# major", or "auto"
+mood: "driving, warm"
+energy: 0.7                       # 0..1, scales the energy curve
+length_seconds: [180, 210]        # target window (3:00-3:30)
+structure: [intro, verse, build, drop, verse2, drop2, outro]
+
+# --- sound sources (hard rule 1) -------------------------------------------
+sample_library:                   # READ-ONLY roots. Nothing here is ever modified.
+  - "TODO/absolute/path/to/Samples"
+sample_folders:                   # optional role hints: sub-folders of the roots
+  drums: []
+  loops: []
+  bass: []
+  vocals: []
+  fx: []
+
+plugin_whitelist: []              # exact VST3 names as Live's browser shows them
+banned_plugins: []
+allow_stock_utility: true         # EQ Eight, Compressor, Glue Compressor, Utility, Limiter, Auto Filter
+
+# User Library presets (paths relative to User Library, as Live's browser shows them)
+# Each must load a whitelisted plugin; the loaded device is verified after insertion.
+presets:
+  drums: "TODO/Presets/Instruments/My Drum Kit.adg"   # MIDI drum instrument (drums.mode: midi)
+  bass: "TODO/Presets/Instruments/My Bass.adv"
+  chords: "TODO/Presets/Instruments/My Keys.adv"
+  hook: "TODO/Presets/Instruments/My Lead.adv"
+  pad: "TODO/Presets/Instruments/My Pad.adv"
+  reverb: ""                      # optional whitelisted reverb preset for return A
+  delay: ""                       # optional whitelisted delay preset for return B
+
+drums:
+  mode: midi                      # midi: notes into presets.drums | audio_hits: one-shot clips from the library
+  note_map: {kick: 36, snare: 38, clap: 39, hat_closed: 42, hat_open: 46, perc: 37, ride: 51}
+
+# --- mix / delivery -----------------------------------------------------------
+loudness_target_lufs: -9.0        # -9 club, -14 streaming
+true_peak_max_dbtp: -1.0
+export:
+  sample_rate: 48000
+  bit_depth: 24
+  stems: true
+  mp3_preview: true               # needs ffmpeg on PATH
+project_path: "TODO/absolute/path/for/new/projects"
+
+# --- bridge -------------------------------------------------------------------
+osc: {host: 127.0.0.1, send_port: 11000, recv_port: 11001, timeout: 5.0}
+gui:                              # OS-level automation for Save As and Export (no LOM call exists)
+  enabled: true
+  step_delay: 0.8                 # seconds between keystrokes; raise on slow machines
+  export_timeout: 900

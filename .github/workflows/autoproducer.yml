@@ -1,0 +1,23 @@
+name: AutoProducer (python pipeline)
+
+on:
+  push:
+    paths: [ "autoproducer/**", ".github/workflows/autoproducer.yml" ]
+  pull_request:
+    paths: [ "autoproducer/**", ".github/workflows/autoproducer.yml" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: autoproducer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y libsndfile1
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
