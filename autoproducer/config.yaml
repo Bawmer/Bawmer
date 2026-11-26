@@ -40,7 +40,7 @@ drums:
   note_map: {kick: 36, snare: 38, clap: 39, hat_closed: 42, hat_open: 46, perc: 37, ride: 51}
 
 # --- mix / delivery -----------------------------------------------------------
-loudness_target_lufs: -14.0       # streaming. Use -9.0 for club
+loudness_target_lufs: -9.0        # club. Use -14.0 for streaming
 true_peak_max_dbtp: -1.0
 export: {sample_rate: 48000, bit_depth: 24, stems: true, mp3_preview: true}
 project_path: "TODO 4: absolute folder for new projects, e.g. D:/Music/AutoProducer"
