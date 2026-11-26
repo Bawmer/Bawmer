@@ -8,7 +8,7 @@ seed: 42
 genre: progressive_house          # house | progressive_house | techno | dnb | trap | pop | lofi
 subgenre: "modern festival / progressive house"
 reference_tracks: ["Martin Garrix (modern era): style reference only, nothing sampled or copied"]
-bpm: auto                         # picked within 126-128 from the tempo of your loops
+bpm: 128
 key: auto                         # picked to match the most tonal samples in your library
 mood: "euphoric, bright, festival anthem"
 energy: 0.95
@@ -17,7 +17,7 @@ structure: [intro, verse, build, drop, breakdown, build2, drop2, outro]
 
 # --- sound sources ------------------------------------------------------------
 sample_library:
-  - "TODO 1: absolute path to your sample library, e.g. D:/Samples"
+  - 'K:\000AUDIO BUREAU\SLAP'      # single quotes: backslashes stay literal
 sample_folders: {drums: [], loops: [], bass: [], vocals: [], fx: []}   # optional; folder names are auto-detected
 
 plugin_whitelist:                 # TODO 2: exact VST3 names as Live's Plug-Ins browser shows them
