@@ -96,7 +96,8 @@ class Live:
         return [Device(i // 3, flat[i], flat[i + 1], flat[i + 2]) for i in range(0, len(flat), 3)]
 
     # -- device loading with whitelist enforcement (hard rule 2) -------------------
-    def load_preset(self, kind: str, index: int, preset_path: str, expect_plugin: str | None) -> Device:
+    def load_preset(self, kind: str, index: int, preset_path: str, expect_plugin: str | None,
+                    require_plugin: bool = False) -> Device:
         """Load a User Library preset, then VERIFY what actually got inserted.
         Any inserted plugin that is not whitelisted is deleted and the run stops."""
         reply = self.c.ap("/live/ap/browser/load_user_preset", kind, index, preset_path, timeout=30.0)
@@ -108,6 +109,13 @@ class Live:
             raise LiveError(f"loading {preset_path!r} added no device to {kind} {index}")
         self._enforce(kind, index, devs)
         main = new[0]
+        if require_plugin and not main.is_plugin:
+            # e.g. a Wavetable/Operator preset: stock instruments are not an allowed sound source
+            for d in reversed(new):
+                self.c.ap("/live/ap/track/delete_device", kind, index, d.index)
+            log("preset_not_vst3_removed", preset=preset_path, device=main.name, cls=main.class_name)
+            raise WhitelistViolation(f"{preset_path!r} loads {main.name!r} ({main.class_name}), "
+                                     "not a VST3 plugin; removed")
         if expect_plugin:
             names = [d.name for d in new] + [d.display for d in new]
             if not any(expect_plugin.lower() in n.lower() for n in names):

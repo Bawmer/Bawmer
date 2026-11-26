@@ -24,12 +24,13 @@ plugin_whitelist: all             # every VST3 Live has scanned (C:/Program File
 banned_plugins: []
 allow_stock_utility: true         # EQ Eight, Compressor, Glue, Utility, Limiter, Auto Filter
 
-presets:                          # TODO 3: User Library paths, each loading a whitelisted plugin
+presets:                          # auto = picked from your User Library .adv presets by name,
+                                  # verified to load a VST3, shown at checkpoint A for approval
   drums: ""                       # not needed: drums.mode is audio_hits
-  bass: "TODO Presets/Instruments/<your bass>.adv"
-  chords: "TODO Presets/Instruments/<your keys>.adv"
-  hook: "TODO Presets/Instruments/<your lead>.adv"
-  pad: "TODO Presets/Instruments/<your pad>.adv"
+  bass: auto
+  chords: auto
+  hook: auto
+  pad: auto
   reverb: ""                      # optional whitelisted reverb preset (return A)
   delay: ""                       # optional whitelisted delay preset (return B)
 

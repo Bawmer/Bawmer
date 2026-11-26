@@ -185,7 +185,12 @@ def make_browser(song):
         Item("Bass.adv", loadable=True, payload=lambda: plugin("Good Synth")),
         Item("Evil.adv", loadable=True, payload=lambda: plugin("Bad Synth")),
         Item("Other.adv", loadable=True, payload=lambda: plugin("Other Synth")),
-        Item("Old.adv", loadable=True, payload=lambda: plugin("Old Synth"))])])])
+        Item("Old.adv", loadable=True, payload=lambda: plugin("Old Synth")),
+        Item("Lead Wavetable.adv", loadable=True,
+             payload=lambda: Device("Wavetable", "InstrumentVector", "Wavetable")),
+        Item("Lead Supersaw Festival.adv", loadable=True, payload=lambda: plugin("Good Synth")),
+        Item("Big Chords Supersaw.adv", loadable=True, payload=lambda: plugin("Good Synth")),
+        Item("Warm Pad.adv", loadable=True, payload=lambda: plugin("Other Synth"))])])])
     browser.audio_effects = Item("Audio Effects", [
         Item(n, loadable=True, payload=(lambda n=n: stock(n))) for n in ("EQ Eight", "Utility", "Auto Filter")
     ] + [Item("Dynamics", [Item(n, loadable=True, payload=(lambda n=n: stock(n)))

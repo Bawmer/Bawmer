@@ -105,7 +105,7 @@ def validate(raw: dict, need_live_assets: bool = True) -> list[str]:
         roles = ["bass", "chords", "hook", "pad"] + (["drums"] if raw["drums"]["mode"] == "midi" else [])
         for r in roles:
             if _todo(raw["presets"].get(r)):
-                p.append(f"presets.{r}: User Library preset path (.adv/.adg)")
+                p.append(f"presets.{r}: User Library preset path (.adv/.adg) or 'auto'")
         listed = [] if isinstance(wl, str) else wl
         overlap = {w.lower() for w in listed} & {b.lower() for b in raw["banned_plugins"]}
         if overlap:

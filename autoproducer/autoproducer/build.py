@@ -9,7 +9,9 @@ from pathlib import Path
 
 from . import compose as comp
 from .actionlog import log
-from .live import WARP_MODES, Live, ramp
+from . import presets_pick
+from .live import WARP_MODES, Live, WhitelistViolation, ramp
+from .osc import LiveError
 from .project import Project
 from .theory import Key
 
@@ -30,12 +32,33 @@ def setup_tracks(live: Live, proj: Project, plan: dict) -> dict:
     tracks: dict = {}
     hit_mode = cfg.drums["mode"] == "audio_hits"
     midi_parts = [p for p in MIDI_PARTS if not (p == "drums" and hit_mode)]
+    auto_roles = [p for p in midi_parts if str(cfg.presets.get(p, "")).strip().lower() == "auto"]
+    ranked = presets_pick.pick_all(live.user_presets(), auto_roles, cfg.genre) if auto_roles else {}
+    taken: set[str] = set()
     for part in midi_parts:
         idx = live.create_track("midi", part.replace("_", " ").title())
-        preset = cfg.presets[part]
-        dev = live.load_preset("track", idx, preset, None)
+        if part in ranked:
+            dev, preset, tried = None, None, []
+            for cand in [c for c in ranked[part] if c not in taken] + [c for c in ranked[part] if c in taken]:
+                try:
+                    dev = live.load_preset("track", idx, cand, None, require_plugin=True)
+                    preset = cand
+                    break
+                except (WhitelistViolation, LiveError) as e:
+                    tried.append(f"{cand}: {e}")
+                    if len(tried) >= 8:
+                        break
+            if dev is None:
+                raise LiveError(f"presets.{part}: auto found no usable VST3 preset. Tried: "
+                                + ("; ".join(tried) or "no preset name matched the role"))
+            taken.add(preset)
+            log("preset_auto_picked", role=part, preset=preset, rejected=tried)
+        else:
+            preset = cfg.presets[part]
+            dev = live.load_preset("track", idx, preset, None, require_plugin=True)
         tracks[part] = {"kind": "track", "index": idx, "instrument": dev.name,
-                        "instrument_class": dev.class_name, "preset": preset, "devices": [dev.name]}
+                        "instrument_class": dev.class_name, "preset": preset, "devices": [dev.name],
+                        "auto_picked": part in ranked}
     audio_parts = list(AUDIO_PARTS) + (list(HIT_PARTS) if hit_mode else [])
     for part in audio_parts:
         idx = live.create_track("audio", part.replace("_", " ").title())

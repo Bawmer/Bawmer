@@ -87,8 +87,17 @@ def run(cfg: Config, live_factory) -> list[dict]:
     _row(rows, "User Library .adv presets found", bool(shown),
          (f"{len(shown)}: " + "; ".join(shown[:40]) + (" ..." if len(shown) > 40 else "")) if shown
          else "none: save your instrument presets (device title bar > Save Preset) first", blocking=False)
+    from . import presets_pick
+    auto = [r for r, v in cfg.presets.items() if str(v).strip().lower() == "auto"]
+    if auto:
+        picks = presets_pick.pick_all(sorted(presets), auto, cfg.genre)
+        for role in auto:
+            c = picks[role]
+            _row(rows, f"preset {role} (auto)", bool(c),
+                 (f"1st choice: {c[0]}" + (f"; fallbacks: {', '.join(c[1:3])}" if len(c) > 1 else ""))
+                 if c else f"no .adv preset name suggests '{role}': rename one or set presets.{role} by hand")
     for role, path in cfg.presets.items():
-        if not path or "TODO" in path:
+        if not path or "TODO" in path or str(path).strip().lower() == "auto":
             continue
         norm = path.replace("\\", "/").strip("/")
         _row(rows, f"preset {role}", norm in presets or any(p.endswith(norm) for p in presets),

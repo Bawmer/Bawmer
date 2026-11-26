@@ -119,6 +119,10 @@ def cmd_sketch(args):
     proj.state["stages"]["sketch"] = "done"
     proj.save_state()
     print(planmod.describe(p))
+    for part, t in result["tracks"].items():
+        if t.get("instrument"):
+            how = "auto-picked" if t.get("auto_picked") else "from config"
+            print(f"  {part:7s} {t['preset']}  ->  {t['instrument']} ({how})")
     print(f"\nSketch built: {sum(result['notes'].values())} MIDI notes, audio clips {result['audio_clips']}.")
     print(f"Saved {als.name}. The 8-bar loop is under the loop brace: press play in Live.")
     print("\nCHECKPOINT A: approve with `autoproducer approve A`, or edit config/plan and re-run plan+sketch.")
