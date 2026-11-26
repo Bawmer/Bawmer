@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-GENRES = ("house", "techno", "dnb", "trap", "pop", "lofi")
+GENRES = ("house", "progressive_house", "techno", "dnb", "trap", "pop", "lofi")
 SECTION_TYPES = ("intro", "verse", "verse2", "build", "build2", "drop", "drop2", "breakdown", "bridge", "outro")
 STOCK_UTILITY = ("EQ Eight", "Compressor", "Glue Compressor", "Utility", "Limiter", "Auto Filter")
 

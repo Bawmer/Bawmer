@@ -20,6 +20,11 @@ PROFILES = {
     "lofi":   {"bpm": (70, 90), "mode": "minor", "drum": "boombap", "swing": 0.22,
                "bass": "root", "chords": "sustain",
                "progressions": [[1, 4, 0, 5], [3, 2, 1, 4], [0, 5, 3, 4]]},
+    # modern festival / progressive house: bright major-key anthems, big lead hook,
+    # sustained supersaw chords pumped by kick ducking, offbeat bass, long snare-roll builds
+    "progressive_house": {"bpm": (126, 128), "mode": "major", "drum": "four_floor", "swing": 0.0,
+                          "bass": "offbeat", "chords": "sustain",
+                          "progressions": [[5, 3, 0, 4], [0, 4, 5, 3], [3, 4, 5, 0], [5, 4, 3, 4]]},
 }
 
 # bars per section type (multiples of 8 so phrases line up)

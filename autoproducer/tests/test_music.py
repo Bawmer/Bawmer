@@ -29,6 +29,16 @@ def make(genre="house", samples=None, **kw):
     return plan.make_plan(cfg, samples if samples is not None else [LOOP, TOP, RISER] + SHOTS)
 
 
+def test_progressive_house_festival_structure():
+    p = make("progressive_house", structure=["intro", "verse", "build", "drop", "breakdown", "build2", "drop2", "outro"],
+             key="auto")
+    assert 126 <= p["bpm"] <= 128 and p["key"].endswith("major")
+    assert [s["name"] for s in p["sections"]][-3:] == ["build2", "drop2", "outro"]
+    assert 180 <= p["duration_seconds"] <= 215
+    parts = comp.compose(p)
+    assert next(c for c in parts["hook"] if c.section == "drop2").notes
+
+
 def test_audio_hits_is_default_and_uses_one_shots():
     p = make()
     assert p["drum_mode"] == "audio_hits"
@@ -62,7 +72,7 @@ def test_estimate_key_from_triad_chroma():
     assert str(k) in ("A minor", "C major")
 
 
-@pytest.mark.parametrize("genre", ["house", "techno", "dnb", "trap", "pop", "lofi"])
+@pytest.mark.parametrize("genre", ["house", "progressive_house", "techno", "dnb", "trap", "pop", "lofi"])
 def test_plan_fits_length_and_is_deterministic(genre):
     p1, p2 = make(genre), make(genre)
     assert p1 == p2
@@ -83,7 +93,7 @@ def test_user_key_forces_transpose():
     assert p["samples"]["tonal_loop"][0]["transpose"] == -2 or p["samples"]["tonal_loop"][0]["transpose"] == 2
 
 
-@pytest.mark.parametrize("genre", ["house", "techno", "dnb", "trap", "pop", "lofi"])
+@pytest.mark.parametrize("genre", ["house", "progressive_house", "techno", "dnb", "trap", "pop", "lofi"])
 def test_all_tonal_notes_in_key(genre):
     p = make(genre)
     key = Key.parse(p["key"])

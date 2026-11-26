@@ -5,15 +5,15 @@ song_name: "first_light"
 os: windows                       # change to macos if Live runs on a Mac
 seed: 42
 
-genre: house                      # house | techno | dnb | trap | pop | lofi
-subgenre: "melodic deep house"
-reference_tracks: []              # style notes only, never sampled
-bpm: auto                         # picked within 120-126 from the tempo of your loops
+genre: progressive_house          # house | progressive_house | techno | dnb | trap | pop | lofi
+subgenre: "modern festival / progressive house"
+reference_tracks: ["Martin Garrix (modern era): style reference only, nothing sampled or copied"]
+bpm: auto                         # picked within 126-128 from the tempo of your loops
 key: auto                         # picked to match the most tonal samples in your library
-mood: "warm, driving, late-night"
-energy: 0.75
+mood: "euphoric, bright, festival anthem"
+energy: 0.95
 length_seconds: [180, 210]        # 3:00-3:30
-structure: [intro, verse, build, drop, verse2, drop2, outro]
+structure: [intro, verse, build, drop, breakdown, build2, drop2, outro]
 
 # --- sound sources ------------------------------------------------------------
 sample_library:
