@@ -4,6 +4,7 @@ Track map is stored in project state so later stages (mix, render) find everythi
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from . import compose as comp
@@ -17,6 +18,7 @@ AUDIO_PARTS = ("top_loop", "tonal_loop", "vocal", "fx")
 HIT_PARTS = ("kick", "snare", "hat", "perc")
 FILTERED = ("chords", "pad", "hook", "tonal_loop")   # get an Auto Filter for sweeps
 DUCKED = ("bass", "chords", "pad", "tonal_loop")      # kick-synced ducking ("sidechain")
+HITS_PER_MESSAGE = 150
 COLORS = {"drums": 69, "bass": 1, "chords": 25, "hook": 13, "pad": 41, "top_loop": 59, "tonal_loop": 23,
           "vocal": 17, "fx": 4, "kick": 69, "snare": 70, "hat": 71, "perc": 72}
 
@@ -85,26 +87,38 @@ def write_midi(live: Live, tracks: dict, parts: dict, note_map: dict) -> dict:
 
 
 def write_hits(live: Live, proj: Project, tracks: dict, plan: dict, parts: dict) -> int:
-    """drums.mode = audio_hits: every drum note becomes a one-shot clip from the library."""
+    """drums.mode = audio_hits: every drum note becomes an unwarped one-shot clip of one of
+    YOUR samples, at its humanized position, with velocity as clip gain (20·log10(vel/127) dB).
+    Clap falls back to the snare sample (and vice versa); open hat/ride use the hat sample."""
     tag_to_part = {"kick": "kick", "snare": "snare", "clap": "snare", "hat_closed": "hat",
                    "hat_open": "hat", "ride": "hat", "perc": "perc"}
     files = {}
     for role in ("kick", "snare", "clap", "hat", "perc"):
         if plan["samples"].get(role):
             files[role] = str(proj.import_sample(plan["samples"][role][0]["path"], role))
-    n = 0
+    fallback = {"clap": "snare", "snare": "clap", "hat_closed": "hat", "hat_open": "hat", "ride": "hat"}
+    by_track: dict[tuple[str, str], list[tuple[float, float]]] = {}
     for c in parts.get("drums", []):
         for note in c.notes:
             part = tag_to_part.get(note.tag, "perc")
-            src = files.get(note.tag if note.tag in files else part) or files.get(part)
+            src = files.get(note.tag) or files.get(fallback.get(note.tag, part)) or files.get(part)
             if not src or part not in tracks:
                 continue
-            t = tracks[part]["index"]
-            ci = live.audio_clip(t, src, c.start_beat + note.start)
-            live.clip_set(t, ci, "warping", 0)
-            live.clip_set(t, ci, "gain", round(0.4 + 0.6 * note.vel / 127, 3))
-            n += 1
-    log("write_hits", clips=n)
+            db = round(20 * math.log10(max(note.vel, 1) / 127.0), 2)
+            by_track.setdefault((part, src), []).append((c.start_beat + note.start, db))
+    n, trim_failed = 0, 0
+    for (part, src), hits in by_track.items():
+        hits.sort()
+        dedup = [h for i, h in enumerate(hits) if i == 0 or h[0] - hits[i - 1][0] > 1e-3]
+        t = tracks[part]["index"]
+        for i in range(0, len(dedup), HITS_PER_MESSAGE):
+            chunk = dedup[i:i + HITS_PER_MESSAGE]
+            nxt = dedup[i + HITS_PER_MESSAGE][0] if i + HITS_PER_MESSAGE < len(dedup) else -1.0
+            placed, failed = live.c.ap("/live/ap/arr/place_hits", t, src, part, float(nxt),
+                                       *[v for h in chunk for v in h], timeout=60.0)
+            n += int(placed)
+            trim_failed += int(failed)
+    log("write_hits", clips=n, trim_failed=trim_failed, tracks=sorted({p for p, _ in by_track}))
     return n
 
 

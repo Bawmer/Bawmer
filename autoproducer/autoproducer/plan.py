@@ -33,7 +33,11 @@ FX_KEYWORDS = {
     "impact": ("impact", "hit", "boom", "crash"),
     "downlifter": ("downlift", "down", "fall", "reverse"),
 }
-KEY_CONF_MIN = 0.15  # below this, a sample's key is treated as unknown
+KEY_CONF_MIN = 0.15
+
+
+class PlanError(ValueError):
+    pass  # below this, a sample's key is treated as unknown
 
 
 def _fx_kind(path: str) -> str | None:
@@ -171,6 +175,13 @@ def make_plan(cfg: Config, samples: list[dict]) -> dict:
     skip = drum_one_shots if cfg.drums["mode"] == "midi" else ()
     sl = shortlist(samples, key, bpm, rng, skip)
     missing = [r for r, v in sl.items() if not v and r not in skip]
+    if cfg.drums["mode"] == "audio_hits":
+        need = [r for r in ("kick", "hat") if not sl[r]]
+        if not sl["snare"] and not sl["clap"]:
+            need.append("snare or clap")
+        if need:
+            raise PlanError("drums.mode audio_hits needs one-shots in your library for: " + ", ".join(need)
+                            + ". Add them (or name the folders so the indexer finds them) and re-run index.")
     # layers we cannot fill from the library are removed (never substituted)
     def available(layer: str) -> bool:
         if layer in ("bass", "chords", "hook", "pad"):

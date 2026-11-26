@@ -15,9 +15,35 @@ RISER = dict(path="/lib/fx/riser_8bar.wav", duration=8.0, bpm=0, key="", key_con
              is_loop=0, transient_density=1, low_ratio=0.1)
 
 
-def make(genre="house", **kw):
+def shot(role, name, dur=0.4):
+    return dict(path=f"/lib/drums/{name}.wav", duration=dur, bpm=0, key="", key_conf=0, role=role,
+                is_loop=0, transient_density=2, low_ratio=0.6 if role == "kick" else 0.1)
+
+
+SHOTS = [shot("kick", "kick_01"), shot("snare", "snare_01"), shot("clap", "clap_01"),
+         shot("hat", "hat_01", 0.15), shot("perc", "rim_01", 0.2)]
+
+
+def make(genre="house", samples=None, **kw):
     cfg = config.from_dict({"genre": genre, "sample_library": ["/lib"], "project_path": "/p", "seed": 7, **kw})
-    return plan.make_plan(cfg, [LOOP, TOP, RISER])
+    return plan.make_plan(cfg, samples if samples is not None else [LOOP, TOP, RISER] + SHOTS)
+
+
+def test_audio_hits_is_default_and_uses_one_shots():
+    p = make()
+    assert p["drum_mode"] == "audio_hits"
+    assert p["samples"]["kick"][0]["path"].endswith("kick_01.wav")
+    assert "kick" in next(s for s in p["sections"] if s["name"] == "drop")["layers"]
+
+
+def test_audio_hits_without_kick_stops():
+    with pytest.raises(plan.PlanError, match="kick"):
+        make(samples=[LOOP, TOP, RISER] + SHOTS[1:])
+
+
+def test_midi_drum_mode_needs_no_one_shots():
+    p = make(samples=[LOOP, TOP, RISER], drums={"mode": "midi"})
+    assert "kick" in next(s for s in p["sections"] if s["name"] == "drop")["layers"]
 
 
 def test_key_parse_and_shift():

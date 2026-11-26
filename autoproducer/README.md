@@ -70,7 +70,8 @@ This code has been tested here against a stubbed Live object model, not against 
 - **Sidechain:** realized as kick-synced volume ducking (a Utility gain envelope, −9 dB per kick). The API cannot reliably set compressor sidechain routing.
 - **Groups:** the API cannot create group tracks, so stems are per track.
 - **Collect All and Save:** not automated. Samples are copied in up front, and the `.als` audit verifies nothing points outside the project.
-- **Drums:** drums need either `presets.drums` (a Drum Rack `.adg` built from your samples, or a whitelisted sampler preset) or `drums.mode: audio_hits` (one-shot clips straight from the library).
+- **Drums (default `drums.mode: audio_hits`):** every hit is an unwarped one-shot clip of your own kick/snare/clap/hat/perc samples on its own track. Hits sit at their humanized position, and velocity is applied as clip gain (≤ 0 dB). Each hit is trimmed so it never overlaps the next. `plan` stops if the library has no kick, hat, or snare/clap. Hits are sent 150 per OSC message. A drum preset is not needed (`drums.mode: midi` + `presets.drums` is the alternative).
+  - To confirm on first run: clip end markers on unwarped clips. The extension tries seconds, then beats, verifies the result, and counts failures in the action log as `trim_failed`.
 - **Export file naming:** Live's export file names are matched by "* Master.wav". If the export dialog fails, the pipeline falls back to resampling, which records the master only and no stems.
 
 ## Tests

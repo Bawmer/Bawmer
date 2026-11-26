@@ -92,7 +92,10 @@ def cmd_plan(args):
     samples = index_samples.load_all(_index_db(cfg))
     if not samples:
         raise SystemExit("sample index is empty: run `autoproducer index` first")
-    p = planmod.make_plan(cfg, samples)
+    try:
+        p = planmod.make_plan(cfg, samples)
+    except planmod.PlanError as e:
+        raise SystemExit(f"plan failed: {e}")
     planmod.save(p, proj.plan_path)
     text = planmod.describe(p)
     (proj.meta / "plan.md").write_text(text, encoding="utf-8")

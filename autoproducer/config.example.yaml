@@ -32,7 +32,7 @@ allow_stock_utility: true         # EQ Eight, Compressor, Glue Compressor, Utili
 # User Library presets (paths relative to User Library, as Live's browser shows them)
 # Each must load a whitelisted plugin; the loaded device is verified after insertion.
 presets:
-  drums: "TODO/Presets/Instruments/My Drum Kit.adg"   # MIDI drum instrument (drums.mode: midi)
+  drums: ""                       # only for drums.mode: midi (Drum Rack .adg / sampler preset)
   bass: "TODO/Presets/Instruments/My Bass.adv"
   chords: "TODO/Presets/Instruments/My Keys.adv"
   hook: "TODO/Presets/Instruments/My Lead.adv"
@@ -41,7 +41,8 @@ presets:
   delay: ""                       # optional whitelisted delay preset for return B
 
 drums:
-  mode: midi                      # midi: notes into presets.drums | audio_hits: one-shot clips from the library
+  mode: audio_hits                # audio_hits: each hit = one-shot clip from YOUR library (kick, snare/clap, hat, perc)
+                                  # midi: notes into presets.drums instead
   note_map: {kick: 36, snare: 38, clap: 39, hat_closed: 42, hat_open: 46, perc: 37, ride: 51}
 
 # --- mix / delivery -----------------------------------------------------------

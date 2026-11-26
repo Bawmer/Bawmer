@@ -460,3 +460,60 @@ class AutoProducerHandler(AbletonOSCHandler):
         def clear_envelopes(track_index, clip_index):
             self._arr_clip(track_index, clip_index).clear_all_envelopes()
         self._add("/live/ap/arr/clear_envelopes", clear_envelopes)
+
+        # -- one-shot drum hits (drums.mode = audio_hits) ------------------------------
+        def _db_of(clip):
+            s = str(clip.gain_display_string).replace("dB", "").strip()
+            return -1e9 if "inf" in s else float(s)
+
+        gain_cache = {}
+
+        def _gain_for_db(clip, db):
+            """Clip.gain is normalised (0..1, not linear dB); find the value whose
+            display reads `db` by bisection, cached per 0.5 dB step."""
+            key = round(db * 2) / 2.0
+            if key in gain_cache:
+                return gain_cache[key]
+            lo, hi = 0.0, 1.0
+            for _ in range(30):
+                mid = (lo + hi) / 2.0
+                clip.gain = mid
+                if _db_of(clip) < key:
+                    lo = mid
+                else:
+                    hi = mid
+            gain_cache[key] = (lo + hi) / 2.0
+            return gain_cache[key]
+
+        def place_hits(track_index, path, name, next_pos, *flat):
+            """flat = pos0, db0, pos1, db1, ... (beats, clip gain dB), sorted by position;
+            next_pos = position of the first hit of the following batch (-1 if none).
+            Each hit: unwarped audio clip, gain set from velocity, end trimmed so it never
+            overlaps the next hit on the same track."""
+            t = self.song.tracks[int(track_index)]
+            hits = [(float(flat[i]), float(flat[i + 1])) for i in range(0, len(flat), 2)]
+            sec_per_beat = 60.0 / self.song.tempo
+            placed, trim_failed = 0, 0
+            for i, (pos, db) in enumerate(hits):
+                t.create_audio_clip(str(path), pos)
+                clip = t.arrangement_clips[_index_of(t, pos)]
+                clip.warping = False
+                clip.name = str(name)
+                clip.gain = _gain_for_db(clip, db)
+                nxt = hits[i + 1][0] if i + 1 < len(hits) else float(next_pos)
+                if nxt > pos:
+                    gap = nxt - pos
+                    if clip.end_time - clip.start_time > gap + 1e-4:
+                        # unwarped clip markers are in seconds; verify, else try beats
+                        for unit in (sec_per_beat, 1.0):
+                            try:
+                                clip.end_marker = clip.start_marker + gap * unit
+                            except Exception:
+                                continue
+                            if clip.end_time - clip.start_time <= gap + 1e-3:
+                                break
+                        else:
+                            trim_failed += 1
+                placed += 1
+            return (placed, trim_failed)
+        self._add("/live/ap/arr/place_hits", place_hits)

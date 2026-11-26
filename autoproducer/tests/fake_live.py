@@ -54,10 +54,24 @@ class Clip:
         self.name, self.file_path, self._notes = "", path, []
         self.is_audio_clip, self.is_midi_clip = path is not None, path is None
         self.warping, self.warp_mode, self.pitch_coarse, self.gain = 0, 0, 0, 0.5
-        self.end_marker = length
+        self.start_marker, self._end_marker = 0.0, length
         self.warp_markers = [types.SimpleNamespace(beat_time=0.0, sample_time=0.0),
                              types.SimpleNamespace(beat_time=8.0, sample_time=4.0)] if path else []
         self.envelopes = {}
+
+    @property
+    def end_marker(self):
+        return self._end_marker
+
+    @end_marker.setter
+    def end_marker(self, v):  # like Live: unwarped markers in seconds (tempo 120 -> 0.5 s/beat)
+        self._end_marker = v
+        beats = v / 0.5 if (self.file_path and not self.warping) else v
+        self.end_time = self.start_time + beats
+
+    @property
+    def gain_display_string(self):
+        return "-inf dB" if self.gain <= 0 else f"{40 * math.log10(self.gain / 0.4):.1f} dB"
 
     def remove_warp_marker(self, beat_time):
         self.warp_markers = [m for m in self.warp_markers if m.beat_time != beat_time]

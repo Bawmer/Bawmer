@@ -24,12 +24,18 @@ def test_full_build(rig, tmp_path):  # noqa: F811
         dict(path=_wav(lib / "fx/riser_8.wav", 8.0), duration=8.0, bpm=0, key="", key_conf=0, role="fx",
              is_loop=0, transient_density=1, low_ratio=0.1),
     ]
-    cfg.raw["presets"] = {p: "Presets/Instruments/Bass.adv" for p in ("drums", "bass", "chords", "hook", "pad")}
+    for role, name, dur in (("kick", "kick", 0.6), ("snare", "snare", 0.4), ("clap", "clap", 0.3),
+                            ("hat", "hat", 0.2), ("perc", "rim", 0.2)):
+        samples.append(dict(path=_wav(lib / f"drums/{name}.wav", dur), duration=dur, bpm=0, key="", key_conf=0,
+                            role=role, is_loop=0, transient_density=2, low_ratio=0.1))
+    cfg.raw["presets"] = {p: "Presets/Instruments/Bass.adv" for p in ("bass", "chords", "hook", "pad")}
     p = planmod.make_plan(cfg, samples)
     proj = Project(cfg, tmp_path / "Song Project")
 
     sk = build.build_sketch(live, proj, p)
-    assert set(sk["tracks"]) >= {"drums", "bass", "chords", "hook", "pad", "top_loop", "tonal_loop", "fx"}
+    assert set(sk["tracks"]) >= {"kick", "snare", "hat", "perc", "bass", "chords", "hook", "pad",
+                                 "top_loop", "tonal_loop", "fx"}
+    assert "drums" not in sk["tracks"]  # no drum instrument in audio_hits mode
     assert sum(sk["notes"].values()) > 100
     assert fake.song.loop_length == 32.0
     # originals untouched, copies inside the project
@@ -37,8 +43,17 @@ def test_full_build(rig, tmp_path):  # noqa: F811
 
     full = build.build_full(live, proj, p)
     tr = proj.state["tracks"]
-    drums = fake.song.tracks[tr["drums"]["index"]].arrangement_clips
-    assert [c.name.split("· ")[1] for c in drums] == [s["name"] for s in p["sections"]]
+    bass = fake.song.tracks[tr["bass"]["index"]].arrangement_clips
+    assert [c.name.split("· ")[1] for c in bass] == [s["name"] for s in p["sections"] if "bass" in s["layers"]]
+    kicks = fake.song.tracks[tr["kick"]["index"]].arrangement_clips
+    drop = next(s for s in p["sections"] if s["name"] == "drop")
+    drop_kicks = [c for c in kicks if drop["start_bar"] * 4 <= c.start_time < (drop["start_bar"] + drop["bars"]) * 4]
+    assert len(drop_kicks) == drop["bars"] * 4 - 1  # four on the floor, one clip per hit; last beat = fill
+    assert all(c.file_path.startswith(str(proj.root)) and not c.warping for c in kicks)
+    assert all(a.end_time <= b.start_time + 1e-3 for a, b in zip(kicks, kicks[1:]))  # trimmed, no overlap
+    hats = fake.song.tracks[tr["hat"]["index"]].arrangement_clips
+    assert len({round(c.gain, 3) for c in hats}) > 3                  # velocity -> gain
+    assert all(-30 < float(c.gain_display_string.split()[0]) <= 0.1 for c in hats)  # never above 0 dB
     fx = fake.song.tracks[tr["fx"]["index"]].arrangement_clips
     build_sec = next(s for s in p["sections"] if s["name"] == "build")
     riser = fx[0]

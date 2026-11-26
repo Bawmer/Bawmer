@@ -19,7 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "structure": ["intro", "verse", "build", "drop", "verse2", "drop2", "outro"],
     "sample_library": [], "sample_folders": {}, "plugin_whitelist": [], "banned_plugins": [],
     "allow_stock_utility": True, "presets": {},
-    "drums": {"mode": "midi", "note_map": {"kick": 36, "snare": 38, "clap": 39, "hat_closed": 42,
+    "drums": {"mode": "audio_hits", "note_map": {"kick": 36, "snare": 38, "clap": 39, "hat_closed": 42,
                                            "hat_open": 46, "perc": 37, "ride": 51}},
     "loudness_target_lufs": -9.0, "true_peak_max_dbtp": -1.0,
     "export": {"sample_rate": 48000, "bit_depth": 24, "stems": True, "mp3_preview": True},
