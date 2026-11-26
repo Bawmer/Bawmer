@@ -43,7 +43,7 @@ drums:
 loudness_target_lufs: -9.0        # club. Use -14.0 for streaming
 true_peak_max_dbtp: -1.0
 export: {sample_rate: 48000, bit_depth: 24, stems: true, mp3_preview: true}
-project_path: "TODO 4: absolute folder for new projects, e.g. D:/Music/AutoProducer"
+project_path: 'K:\AutoProducer'
 
 # --- bridge -------------------------------------------------------------------
 osc: {host: 127.0.0.1, send_port: 11000, recv_port: 11001, timeout: 5.0}
