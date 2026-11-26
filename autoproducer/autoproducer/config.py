@@ -23,7 +23,7 @@ DEFAULTS: dict[str, Any] = {
                                            "hat_open": 46, "perc": 37, "ride": 51}},
     "loudness_target_lufs": -9.0, "true_peak_max_dbtp": -1.0,
     "export": {"sample_rate": 48000, "bit_depth": 24, "stems": True, "mp3_preview": True},
-    "project_path": None,
+    "project_path": None, "abletonosc_path": None,
     "osc": {"host": "127.0.0.1", "send_port": 11000, "recv_port": 11001, "timeout": 5.0},
     "gui": {"enabled": True, "step_delay": 0.8, "export_timeout": 900},
 }

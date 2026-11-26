@@ -46,4 +46,4 @@ project_path: 'K:\AutoProducer'
 # --- bridge -------------------------------------------------------------------
 osc: {host: 127.0.0.1, send_port: 11000, recv_port: 11001, timeout: 5.0}
 gui: {enabled: true, step_delay: 0.8, export_timeout: 900}
-# TODO 5 (not in this file): your AbletonOSC folder for `autoproducer install-ext`
+abletonosc_path: 'C:\Users\me\Documents\Ableton\User Library\Remote Scripts\AbletonOSC'   # used by install-ext

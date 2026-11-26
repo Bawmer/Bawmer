@@ -56,6 +56,7 @@ export:
 project_path: "TODO/absolute/path/for/new/projects"
 
 # --- bridge -------------------------------------------------------------------
+abletonosc_path: ""               # AbletonOSC remote script folder (used by install-ext)
 osc: {host: 127.0.0.1, send_port: 11000, recv_port: 11001, timeout: 5.0}
 gui:                              # OS-level automation for Save As and Export (no LOM call exists)
   enabled: true

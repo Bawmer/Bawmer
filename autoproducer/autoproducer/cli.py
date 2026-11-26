@@ -45,7 +45,12 @@ def _project(cfg) -> Project:
 
 def cmd_install_ext(args):
     from .install_ext import install
-    for line in install(args.abletonosc):
+    path = args.abletonosc
+    if not path:
+        path = load(args.config, need_live_assets=False, strict=False).abletonosc_path
+    if not path:
+        raise SystemExit("give --abletonosc <folder> or set abletonosc_path in config.yaml")
+    for line in install(path):
         print(" -", line)
     print("Done. Restart Live (AbletonOSC must be selected under Preferences > Link, Tempo & MIDI).")
 
@@ -183,7 +188,7 @@ def main(argv=None):
     ap.add_argument("-c", "--config", default="config.yaml")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("install-ext")
-    s.add_argument("--abletonosc", required=True)
+    s.add_argument("--abletonosc", help="AbletonOSC folder (default: abletonosc_path in config.yaml)")
     s.set_defaults(fn=cmd_install_ext)
     for name, fn in (("step0", cmd_step0), ("index", cmd_index), ("init", cmd_init), ("plan", cmd_plan),
                      ("sketch", cmd_sketch)):
