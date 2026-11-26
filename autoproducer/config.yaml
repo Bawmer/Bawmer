@@ -1,0 +1,51 @@
+# AutoProducer config: filled in with defaults. Only the 5 TODO items below need you.
+# Windows paths: keep the double quotes and use forward slashes, e.g. "D:/Samples".
+
+song_name: "first_light"
+os: windows                       # change to macos if Live runs on a Mac
+seed: 42
+
+genre: house                      # house | techno | dnb | trap | pop | lofi
+subgenre: "melodic deep house"
+reference_tracks: []              # style notes only, never sampled
+bpm: auto                         # picked within 120-126 from the tempo of your loops
+key: auto                         # picked to match the most tonal samples in your library
+mood: "warm, driving, late-night"
+energy: 0.75
+length_seconds: [180, 210]        # 3:00-3:30
+structure: [intro, verse, build, drop, verse2, drop2, outro]
+
+# --- sound sources ------------------------------------------------------------
+sample_library:
+  - "TODO 1: absolute path to your sample library, e.g. D:/Samples"
+sample_folders: {drums: [], loops: [], bass: [], vocals: [], fx: []}   # optional; folder names are auto-detected
+
+plugin_whitelist:                 # TODO 2: exact VST3 names as Live's Plug-Ins browser shows them
+  []
+  # - "Lumen MC-64"               # your own compressor: uncomment only if it's installed and scanned
+banned_plugins: []
+allow_stock_utility: true         # EQ Eight, Compressor, Glue, Utility, Limiter, Auto Filter
+
+presets:                          # TODO 3: User Library paths, each loading a whitelisted plugin
+  drums: ""                       # not needed: drums.mode is audio_hits
+  bass: "TODO Presets/Instruments/<your bass>.adv"
+  chords: "TODO Presets/Instruments/<your keys>.adv"
+  hook: "TODO Presets/Instruments/<your lead>.adv"
+  pad: "TODO Presets/Instruments/<your pad>.adv"
+  reverb: ""                      # optional whitelisted reverb preset (return A)
+  delay: ""                       # optional whitelisted delay preset (return B)
+
+drums:
+  mode: audio_hits                # one-shots from your library: kick, snare/clap, hat, perc
+  note_map: {kick: 36, snare: 38, clap: 39, hat_closed: 42, hat_open: 46, perc: 37, ride: 51}
+
+# --- mix / delivery -----------------------------------------------------------
+loudness_target_lufs: -14.0       # streaming. Use -9.0 for club
+true_peak_max_dbtp: -1.0
+export: {sample_rate: 48000, bit_depth: 24, stems: true, mp3_preview: true}
+project_path: "TODO 4: absolute folder for new projects, e.g. D:/Music/AutoProducer"
+
+# --- bridge -------------------------------------------------------------------
+osc: {host: 127.0.0.1, send_port: 11000, recv_port: 11001, timeout: 5.0}
+gui: {enabled: true, step_delay: 0.8, export_timeout: 900}
+# TODO 5 (not in this file): your AbletonOSC folder for `autoproducer install-ext`
