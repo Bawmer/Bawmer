@@ -72,11 +72,21 @@ def run(cfg: Config, live_factory) -> list[dict]:
         return rows
     plugins = live.plugins(refresh=True)
     leaf = {p.split("/")[-1].lower(): p for p in plugins}
-    for name in cfg.plugin_whitelist:
+    if cfg.all_vst3:
+        vst3 = live.vst3_names()
+        _row(rows, "VST3 plugins scanned (whitelist: all)", bool(vst3),
+             f"{len(vst3)} VST3 plugins in Live's browser" if vst3 else
+             "no 'VST3' folder in Live's Plug-Ins browser -> enable 'Use VST3 Plug-In System Folders' "
+             "(Preferences > Plug-Ins) and rescan")
+    for name in ([] if cfg.all_vst3 else cfg.plugin_whitelist):
         hit = [p for k, p in leaf.items() if k == name.lower() or name.lower() in k]
         _row(rows, f"VST3 scanned: {name}", bool(hit), hit[0] if hit else
              "NOT FOUND in Live's Plug-Ins browser -> rescan (Preferences > Plug-Ins) and check the exact name")
     presets = set(live.user_presets())
+    shown = sorted(p for p in presets if p.lower().endswith(".adv"))
+    _row(rows, "User Library .adv presets found", bool(shown),
+         (f"{len(shown)}: " + "; ".join(shown[:40]) + (" ..." if len(shown) > 40 else "")) if shown
+         else "none: save your instrument presets (device title bar > Save Preset) first", blocking=False)
     for role, path in cfg.presets.items():
         if not path or "TODO" in path:
             continue

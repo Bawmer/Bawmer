@@ -65,6 +65,17 @@ class Live:
             self.c.ap("/live/ap/browser/refresh")
         return self.c.ap_paged("/live/ap/browser/plugins", page_size=40)
 
+    def vst3_names(self, refresh: bool = False) -> set[str]:
+        """Lowercased names of every plugin Live lists under a 'VST3' folder of the Plug-Ins browser."""
+        if refresh or getattr(self, "_vst3", None) is None:
+            self._vst3 = {p.split("/")[-1].strip().lower() for p in self.plugins(refresh)
+                          if p.split("/")[0].strip().lower() in ("vst3", "vst 3", "vst3 plug-ins")}
+        return self._vst3
+
+    def plugin_ok(self, d: "Device") -> bool:
+        names = self.vst3_names() if self.cfg.all_vst3 else None
+        return self.cfg.plugin_allowed(d.name, names) or self.cfg.plugin_allowed(d.display, names)
+
     def user_presets(self) -> list[str]:
         return self.c.ap_paged("/live/ap/browser/user_presets", page_size=40)
 
@@ -124,7 +135,7 @@ class Live:
 
     def _enforce(self, kind: str, index: int, devs: Iterable[Device]) -> None:
         for d in devs:
-            if d.is_plugin and not (self.cfg.plugin_allowed(d.name) or self.cfg.plugin_allowed(d.display)):
+            if d.is_plugin and not self.plugin_ok(d):
                 self.c.ap("/live/ap/track/delete_device", kind, index, d.index)
                 log("whitelist_violation_removed", track=(kind, index), device=d.name, cls=d.class_name)
                 raise WhitelistViolation(
@@ -138,7 +149,7 @@ class Live:
         problems = []
         for t in self.tracks() + [{"kind": "master", "index": 0, "name": "Master"}]:
             for d in self.devices(t["kind"], t["index"]):
-                if d.is_plugin and not (self.cfg.plugin_allowed(d.name) or self.cfg.plugin_allowed(d.display)):
+                if d.is_plugin and not self.plugin_ok(d):
                     problems.append(f"{t['name']}: {d.name} ({d.class_name})")
         return problems
 

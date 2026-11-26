@@ -46,10 +46,18 @@ class Config:
             raise AttributeError(name) from None
 
     # --- whitelist gate (hard rule 2) ------------------------------------
-    def plugin_allowed(self, name: str) -> bool:
+    @property
+    def all_vst3(self) -> bool:
+        return isinstance(self.raw["plugin_whitelist"], str) and self.raw["plugin_whitelist"].lower() == "all"
+
+    def plugin_allowed(self, name: str, vst3_names: set[str] | None = None) -> bool:
+        """Named whitelist: exact (case-insensitive) match. `all`: any plugin Live lists
+        under VST3 in its Plug-Ins browser (vst3_names, lowercased). Banned always wins."""
         n = name.strip().lower()
         if any(n == b.strip().lower() for b in self.raw["banned_plugins"]):
             return False
+        if self.all_vst3:
+            return vst3_names is not None and n in vst3_names
         return any(n == w.strip().lower() for w in self.raw["plugin_whitelist"])
 
     def stock_allowed(self, name: str) -> bool:
@@ -91,13 +99,15 @@ def validate(raw: dict, need_live_assets: bool = True) -> list[str]:
     if raw["drums"]["mode"] not in ("midi", "audio_hits"):
         p.append("drums.mode: midi or audio_hits")
     if need_live_assets:
-        if not raw["plugin_whitelist"]:
-            p.append("plugin_whitelist: list the exact VST3 names as shown in Live")
+        wl = raw["plugin_whitelist"]
+        if isinstance(wl, str) and wl.lower() != "all" or not wl:
+            p.append("plugin_whitelist: 'all' (every scanned VST3) or a list of exact VST3 names")
         roles = ["bass", "chords", "hook", "pad"] + (["drums"] if raw["drums"]["mode"] == "midi" else [])
         for r in roles:
             if _todo(raw["presets"].get(r)):
                 p.append(f"presets.{r}: User Library preset path (.adv/.adg)")
-        overlap = {w.lower() for w in raw["plugin_whitelist"]} & {b.lower() for b in raw["banned_plugins"]}
+        listed = [] if isinstance(wl, str) else wl
+        overlap = {w.lower() for w in listed} & {b.lower() for b in raw["banned_plugins"]}
         if overlap:
             p.append(f"plugin on both whitelist and banned list: {sorted(overlap)}")
     if not -30 <= float(raw["loudness_target_lufs"]) <= -5:

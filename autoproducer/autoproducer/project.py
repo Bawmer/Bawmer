@@ -112,17 +112,20 @@ def audit_als(als: Path, project_root: Path) -> dict:
     with gzip.open(als, "rb") as fh:
         tree = ET.parse(fh)
     root = tree.getroot()
-    files, plugins = set(), set()
+    files, plugins, formats = set(), set(), {}
     for ref in root.iter("FileRef"):
         p = ref.find("Path")
         if p is not None and p.get("Value"):
             files.add(p.get("Value"))
-    for tag, name_tag in (("Vst3PluginInfo", "Name"), ("VstPluginInfo", "PlugName"), ("AuPluginInfo", "Name")):
+    for tag, name_tag, fmt in (("Vst3PluginInfo", "Name", "VST3"), ("VstPluginInfo", "PlugName", "VST2"),
+                               ("AuPluginInfo", "Name", "AU")):
         for info in root.iter(tag):
             n = info.find(name_tag)
             if n is not None and n.get("Value"):
                 plugins.add(n.get("Value"))
+                formats[n.get("Value")] = fmt
     pr = str(project_root.resolve()).replace("\\", "/").lower()
     outside = sorted(f for f in files if not f.replace("\\", "/").lower().startswith(pr)
                      and not f.lower().endswith((".adv", ".adg", ".asd")))
-    return {"files": sorted(files), "outside_project": outside, "plugins": sorted(plugins)}
+    return {"files": sorted(files), "outside_project": outside, "plugins": sorted(plugins),
+            "plugin_formats": formats}

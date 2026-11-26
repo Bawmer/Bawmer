@@ -40,8 +40,9 @@ def test_environment_calls(rig):
     assert live.test()
     assert live.version() == (12, 4, 3)
     assert live.ext_ok()
-    assert live.plugins() == ["VST3/Vendor/Bad Synth", "VST3/Vendor/Good Synth"]
-    assert live.user_presets() == ["Presets/Instruments/Bass.adv", "Presets/Instruments/Evil.adv"]
+    assert live.plugins() == ["VST/Old Synth", "VST3/Vendor/Bad Synth", "VST3/Vendor/Good Synth",
+                              "VST3/Vendor/Other Synth"]
+    assert "Presets/Instruments/Bass.adv" in live.user_presets()
 
 
 def test_whitelisted_preset_loads_and_is_verified(rig):
@@ -129,3 +130,20 @@ def test_install_ext_is_idempotent(tmp_path):
     assert m.count("AutoProducerHandler") == 1
     assert (root / "abletonosc" / "__init__.py").read_text().count("AutoProducerHandler") == 1
     assert (root / "abletonosc" / "autoproducer.py").exists()
+
+
+def test_whitelist_all_allows_any_scanned_vst3_only(rig):
+    fake, live, cfg = rig
+    cfg.raw["plugin_whitelist"] = "all"
+    assert not cfg.problems or all("plugin_whitelist" not in p for p in config.validate(cfg.raw))
+    t = live.create_track("midi", "Lead")
+    assert live.load_preset("track", t, "Presets/Instruments/Other.adv", None).name == "Other Synth"
+    t2 = live.create_track("midi", "Old")
+    with pytest.raises(WhitelistViolation):          # VST2, not VST3
+        live.load_preset("track", t2, "Presets/Instruments/Old.adv", None)
+    t3 = live.create_track("midi", "Banned")
+    with pytest.raises(WhitelistViolation):          # banned beats 'all'
+        live.load_preset("track", t3, "Presets/Instruments/Evil.adv", None)
+    rows = {r["check"]: r for r in step0.run(cfg, lambda: live)}
+    assert rows["VST3 plugins scanned (whitelist: all)"]["status"] == "PASS"
+    assert "3 VST3" in rows["VST3 plugins scanned (whitelist: all)"]["detail"]

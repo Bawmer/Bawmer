@@ -94,7 +94,11 @@ def write_report(proj: Project, plan: dict) -> Path:
                   f"- Referenced files: {len(a['files'])}, outside project: {len(a['outside_project'])}"]
         for f in a["outside_project"][:20]:
             lines.append(f"  - ⚠️ `{f}`")
-        bad = [p for p in a["plugins"] if not proj.cfg.plugin_allowed(p)]
+        if proj.cfg.all_vst3:
+            banned = {b.lower() for b in proj.cfg.banned_plugins}
+            bad = [p for p in a["plugins"] if a["plugin_formats"].get(p) != "VST3" or p.lower() in banned]
+        else:
+            bad = [p for p in a["plugins"] if not proj.cfg.plugin_allowed(p)]
         lines.append(f"- Plugins in .als: {', '.join(a['plugins']) or 'none'}"
                      + (f". ⚠️ NOT WHITELISTED: {bad}" if bad else ". All whitelisted."))
     lines += ["", "## Versions", ""] + [f"- `{v['file']}`: {v['stage']}" for v in st.get("als", [])]

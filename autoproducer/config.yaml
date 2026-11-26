@@ -20,9 +20,7 @@ sample_library:
   - 'K:\000AUDIO BUREAU\SLAP'      # single quotes: backslashes stay literal
 sample_folders: {drums: [], loops: [], bass: [], vocals: [], fx: []}   # optional; folder names are auto-detected
 
-plugin_whitelist:                 # TODO 2: exact VST3 names as Live's Plug-Ins browser shows them
-  []
-  # - "Lumen MC-64"               # your own compressor: uncomment only if it's installed and scanned
+plugin_whitelist: all             # every VST3 Live has scanned (C:/Program Files/Common Files/VST3); no VST2/AU
 banned_plugins: []
 allow_stock_utility: true         # EQ Eight, Compressor, Glue, Utility, Limiter, Auto Filter
 

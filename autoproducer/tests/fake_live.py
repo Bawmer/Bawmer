@@ -178,10 +178,14 @@ def make_browser(song):
     browser = types.SimpleNamespace()
     browser.plugins = Item("Plug-Ins", [Item("VST3", [Item("Vendor", [
         Item("Good Synth", loadable=True, payload=lambda: plugin("Good Synth")),
-        Item("Bad Synth", loadable=True, payload=lambda: plugin("Bad Synth"))])])])
+        Item("Bad Synth", loadable=True, payload=lambda: plugin("Bad Synth")),
+        Item("Other Synth", loadable=True, payload=lambda: plugin("Other Synth"))])]),
+        Item("VST", [Item("Old Synth", loadable=True, payload=lambda: plugin("Old Synth"))])])
     browser.user_library = Item("User Library", [Item("Presets", [Item("Instruments", [
         Item("Bass.adv", loadable=True, payload=lambda: plugin("Good Synth")),
-        Item("Evil.adv", loadable=True, payload=lambda: plugin("Bad Synth"))])])])
+        Item("Evil.adv", loadable=True, payload=lambda: plugin("Bad Synth")),
+        Item("Other.adv", loadable=True, payload=lambda: plugin("Other Synth")),
+        Item("Old.adv", loadable=True, payload=lambda: plugin("Old Synth"))])])])
     browser.audio_effects = Item("Audio Effects", [
         Item(n, loadable=True, payload=(lambda n=n: stock(n))) for n in ("EQ Eight", "Utility", "Auto Filter")
     ] + [Item("Dynamics", [Item(n, loadable=True, payload=(lambda n=n: stock(n)))
